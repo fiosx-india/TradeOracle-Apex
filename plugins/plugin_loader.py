@@ -1,4 +1,5 @@
-"""Auto-discovery of Python engines placed directly in incoming/."""
+"""Auto-discovery of PLUGIN_CLASS files directly inside incoming/."""
+
 import importlib.util
 from pathlib import Path
 
@@ -17,7 +18,10 @@ class PluginLoader:
 
             try:
                 module_name = f"apex_incoming_{path.stem}"
-                spec = importlib.util.spec_from_file_location(module_name, path)
+                spec = importlib.util.spec_from_file_location(
+                    module_name, path
+                )
+
                 if spec is None or spec.loader is None:
                     raise ImportError("Unable to create module loader")
 
@@ -25,6 +29,7 @@ class PluginLoader:
                 spec.loader.exec_module(module)
 
                 engine_cls = getattr(module, "PLUGIN_CLASS", None)
+
                 if engine_cls is None:
                     results.append({
                         "file": str(path),
