@@ -1,20 +1,12 @@
-"""Main TradeOracle Apex dashboard coordinator.
-
-The dashboard layer is intentionally presentation-oriented:
-- accepts already-computed market/prediction evidence,
-- builds early-movement alerts,
-- prepares compact sections for UI adapters,
-- never fabricates live prices or prediction outcomes.
-
-A Streamlit/UI adapter can call render() and display the returned structure.
-"""
-
-from __future__ import annotations
-
-from typing import Any, Mapping, Sequence
+"""TradeOracle Apex dashboard layer."""
 
 from .dashboard import Dashboard
 from .movement_alert import MovementAlert
+
+__all__ = [
+    "Dashboard",
+    "MovementAlert",
+]
 
 
 class Dashboard:
