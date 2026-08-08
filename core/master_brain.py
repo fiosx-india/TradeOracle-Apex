@@ -1,6 +1,7 @@
-"""Apex Master Brain: final evidence-fusion and decision layer."""
+"""Apex Master Brain: combines evidence from registered engines."""
 from .evidence_fusion import EvidenceFusion
 from .decision_engine import DecisionEngine
+
 
 class ApexMasterBrain:
     name = "ApexMasterBrain"
@@ -9,6 +10,41 @@ class ApexMasterBrain:
     def __init__(self):
         self.fusion = EvidenceFusion()
         self.decision = DecisionEngine()
+        self.registry = None
 
-    def evaluate(self, evidence):
-        return self.decision.decide(self.fusion.combine(evidence))
+    def attach_registry(self, registry):
+        self.registry = registry
+
+    def collect_evidence(self, context):
+        evidence = []
+
+        if self.registry is None:
+            return evidence
+
+        for engine in self.registry.all().values():
+            try:
+                if callable(getattr(engine, "analyze", None)):
+                    result = engine.analyze(context)
+                elif callable(getattr(engine, "predict", None)):
+                    result = engine.predict(context)
+                else:
+                    continue
+
+                if isinstance(result, dict):
+                    result.setdefault("engine", engine.name)
+                    evidence.append(result)
+            except Exception as exc:
+                # A failed plugin does not crash the whole brain.
+                evidence.append({
+                    "engine": engine.name,
+                    "score": 0.0,
+                    "weight": 0.0,
+                    "reason": f"engine_error:{type(exc).__name__}",
+                })
+
+        return evidence
+
+    def evaluate(self, context):
+        evidence = self.collect_evidence(context)
+        fused = self.fusion.combine(evidence)
+        return self.decision.decide(fused)
