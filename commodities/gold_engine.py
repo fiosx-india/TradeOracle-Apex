@@ -1,6 +1,16 @@
 """Gold analysis adapter."""
-class GoldEngine:
-    name = "GoldEngine"
-    capabilities = ["COMMODITY"]
-    def analyze(self, *args, **kwargs):
-        return {"direction": "SIDEWAYS", "score": 0.0}
+
+from .commodity_engine import CommodityEngine
+
+
+class GoldEngine(CommodityEngine):
+    name="GoldEngine"
+    version="2.0.0"
+    capabilities=["COMMODITY","GOLD"]
+
+    def self_test(self): return True
+
+    def analyze(self, observation=None, *args, **kwargs):
+        result=super().analyze(observation or {}, *args, **kwargs)
+        result["commodity"]="GOLD"
+        return result

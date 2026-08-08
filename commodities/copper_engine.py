@@ -1,6 +1,16 @@
 """Copper analysis adapter."""
-class CopperEngine:
-    name = "CopperEngine"
-    capabilities = ["COMMODITY"]
-    def analyze(self, *args, **kwargs):
-        return {"direction": "SIDEWAYS", "score": 0.0}
+
+from .commodity_engine import CommodityEngine
+
+
+class CopperEngine(CommodityEngine):
+    name="CopperEngine"
+    version="2.0.0"
+    capabilities=["COMMODITY","COPPER"]
+
+    def self_test(self): return True
+
+    def analyze(self, observation=None, *args, **kwargs):
+        result=super().analyze(observation or {}, *args, **kwargs)
+        result["commodity"]="COPPER"
+        return result
