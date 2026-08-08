@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from .dashboard import Dashboard
 from .movement_alert import MovementAlert
 
 
