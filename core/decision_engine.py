@@ -1,10 +1,33 @@
-"""Converts fused evidence into a transparent directional state."""
+"""Transparent directional decision layer."""
+
+from config import DOWN_THRESHOLD, MIN_CONFIDENCE_FOR_SIGNAL, UP_THRESHOLD
+
+
 class DecisionEngine:
     def decide(self, fused):
-        score = fused.get("score", 0.0)
-        direction = "UP" if score > 0.15 else "DOWN" if score < -0.15 else "SIDEWAYS"
+        score = float(fused.get("score", 0.0))
+        confidence = float(fused.get("confidence", 0.0))
+
+        if score >= UP_THRESHOLD:
+            direction = "UP"
+        elif score <= DOWN_THRESHOLD:
+            direction = "DOWN"
+        else:
+            direction = "SIDEWAYS"
+
+        signal_strength = (
+            "STRONG" if confidence >= 0.80
+            else "MODERATE" if confidence >= MIN_CONFIDENCE_FOR_SIGNAL
+            else "WEAK"
+        )
+
         return {
             "direction": direction,
-            "confidence": fused.get("confidence", 0.0),
+            "score": round(score, 6),
+            "confidence": round(confidence, 6),
+            "signal_strength": signal_strength,
+            "agreement": fused.get("agreement", 0.0),
             "reasons": fused.get("reasons", []),
+            "evidence": fused.get("evidence", []),
+            "explainable": True,
         }
