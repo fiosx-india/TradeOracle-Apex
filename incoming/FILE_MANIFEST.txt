@@ -1,0 +1,5 @@
+README.md
+PLUGIN_CONTRACT.md
+INCOMING_RULES.txt
+FILE_MANIFEST.txt
+example_engine.py

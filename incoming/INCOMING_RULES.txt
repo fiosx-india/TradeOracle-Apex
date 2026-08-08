@@ -1,0 +1,11 @@
+TRADEORACLE APEX — INCOMING RULES
+
+1. New Python AI/Research/Signal engine -> put directly in this folder.
+2. Do not edit core imports for every new engine.
+3. Do not rename PLUGIN_CLASS.
+4. The engine must declare name and capabilities.
+5. It must implement analyze(context) or predict(context).
+6. Auto-Fit performs:
+   DISCOVER -> VALIDATE -> BENCHMARK -> REGISTER -> MASTER BRAIN
+7. A failed engine is rejected; it must not break the rest of the system.
+8. Production trading accuracy must be proven separately with historical and walk-forward validation.
