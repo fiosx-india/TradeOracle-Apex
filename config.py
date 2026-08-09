@@ -8,7 +8,12 @@ PREDICTION_HORIZON_MINUTES = int(
     os.getenv("APEX_HORIZON_MINUTES", "60")
 )
 
-DATA_MODE = os.getenv("APEX_DATA_MODE", "demo")
+# Provider-agnostic live-data configuration.
+# "demo" preserves the current diagnostic/demo behaviour.
+# "live" indicates that a real market-data provider is expected.
+DATA_MODE = os.getenv("APEX_DATA_MODE", "demo").strip().lower()
+DATA_PROVIDER = os.getenv("APEX_DATA_PROVIDER", "").strip()
+
 INCOMING_DIR = os.getenv("APEX_INCOMING_DIR", "incoming")
 
 # Direction thresholds are deliberately configurable.
@@ -19,4 +24,3 @@ DOWN_THRESHOLD = float(os.getenv("APEX_DOWN_THRESHOLD", "-0.15"))
 MIN_CONFIDENCE_FOR_SIGNAL = float(
     os.getenv("APEX_MIN_CONFIDENCE", "0.60")
 )
-
