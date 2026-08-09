@@ -1,8 +1,7 @@
-"""Apex orchestration: Discover -> Validate -> Benchmark -> Register -> Master Brain.
+"""Apex orchestration: discover -> validate -> benchmark -> register -> evaluate.
 
-Live-data integration remains provider-driven: the orchestrator never invents
-market data. When a MarketData provider is supplied, the orchestrator can
-normalize the latest records into a shared MarketContext before evaluation.
+The orchestrator owns the shared MarketContext and is the only layer that
+coordinates research/prediction engines. Market data is never fabricated.
 """
 
 from datetime import datetime, timezone
@@ -12,95 +11,117 @@ from .master_brain import ApexMasterBrain
 from .system_registry import SystemRegistry
 from .capability_router import CapabilityRouter
 from .market_context import MarketContext
+from .builtin_engines import BUILTIN_ENGINE_CLASSES
 from plugins.plugin_loader import PluginLoader
 from plugins.plugin_validator import PluginValidator
 from plugins.plugin_benchmark import PluginBenchmark
 from data.market_data import MarketData
 
 try:
-    from config import INCOMING_DIR
+    from config import INCOMING_DIR, LIVE_DATA_MAX_AGE_SECONDS
 except ImportError:
     INCOMING_DIR = "incoming"
+    LIVE_DATA_MAX_AGE_SECONDS = 120
 
 
 class ApexOrchestrator:
-    """Coordinate Apex discovery, validation, registration and evaluation."""
+    """Coordinate the complete Apex runtime."""
 
     def __init__(
         self,
         incoming: str = INCOMING_DIR,
         market_data: Optional[MarketData] = None,
         market_provider: Optional[Callable[..., Any]] = None,
-        max_age_seconds: int = 120,
+        max_age_seconds: int = LIVE_DATA_MAX_AGE_SECONDS,
     ):
         self.incoming = incoming
-
         self.registry = SystemRegistry()
         self.router = CapabilityRouter(self.registry)
         self.validator = PluginValidator()
         self.benchmark = PluginBenchmark()
-
         self.market_data = market_data or MarketData(
             provider=market_provider,
             max_age_seconds=max_age_seconds,
         )
-
         self.brain = ApexMasterBrain(
             registry=self.registry,
             router=self.router,
         )
 
     # ------------------------------------------------------------------
-    # DISCOVER -> VALIDATE -> BENCHMARK -> REGISTER
+    # BUILT-IN + INCOMING ENGINE REGISTRATION
     # ------------------------------------------------------------------
+
+    def _register_engine(self, engine, source_file: str):
+        validation = self.validator.validate(engine)
+        if not validation["valid"]:
+            return {
+                "stage": "VALIDATION",
+                "status": "REJECTED",
+                "name": getattr(engine, "name", source_file),
+                "file": source_file,
+                "errors": validation["errors"],
+            }
+
+        benchmark = self.benchmark.benchmark(engine)
+        if not benchmark["passed"]:
+            return {
+                "stage": "BENCHMARK",
+                "status": "REJECTED",
+                "name": getattr(engine, "name", source_file),
+                "file": source_file,
+                "errors": benchmark["errors"],
+                "benchmark": benchmark,
+            }
+
+        self.registry.register(
+            engine,
+            benchmark=benchmark,
+            source_file=source_file,
+        )
+        return {
+            "stage": "REGISTRATION",
+            "status": "ACTIVE",
+            "name": engine.name,
+            "file": source_file,
+            "benchmark": benchmark,
+        }
 
     def discover_validate_benchmark_register(self):
         report = []
-        loader = PluginLoader(self.incoming)
 
+        # Core engines are part of the application and must be available even
+        # when incoming/ is empty. They are still contract-tested before use.
+        for engine_cls in BUILTIN_ENGINE_CLASSES:
+            try:
+                report.append(
+                    self._register_engine(
+                        engine_cls(),
+                        f"builtin:{engine_cls.__module__}.{engine_cls.__name__}",
+                    )
+                )
+            except Exception as exc:
+                report.append({
+                    "stage": "REGISTRATION",
+                    "status": "ERROR",
+                    "name": getattr(engine_cls, "name", engine_cls.__name__),
+                    "file": f"builtin:{engine_cls.__module__}.{engine_cls.__name__}",
+                    "errors": [f"{type(exc).__name__}: {exc}"],
+                })
+
+        # User-supplied compatible engines remain supported.
+        loader = PluginLoader(self.incoming)
         for item in loader.discover():
             if not item["loaded"]:
                 report.append(item)
                 continue
 
-            engine = item["engine"]
-
-            validation = self.validator.validate(engine)
-            if not validation["valid"]:
-                report.append({
-                    "stage": "VALIDATION",
-                    "status": "REJECTED",
-                    "name": getattr(engine, "name", item["file"]),
-                    "file": item["file"],
-                    "errors": validation["errors"],
-                })
-                continue
-
-            benchmark = self.benchmark.benchmark(engine)
-            if not benchmark["passed"]:
-                report.append({
-                    "stage": "BENCHMARK",
-                    "status": "REJECTED",
-                    "name": engine.name,
-                    "file": item["file"],
-                    "errors": benchmark["errors"],
-                    "benchmark": benchmark,
-                })
-                continue
-
-            self.registry.register(
-                engine,
-                benchmark=benchmark,
-                source_file=item["file"],
+            report.append(
+                self._register_engine(
+                    item["engine"],
+                    item["file"],
+                )
             )
-
-            report.append({
-                "stage": "REGISTRATION",
-                "status": "ACTIVE",
-                "name": engine.name,
-                "file": item["file"],
-                "benchmark": benchmark,
-            })
 
         self.brain.attach_registry(self.registry, self.router)
         return report
@@ -111,11 +132,6 @@ class ApexOrchestrator:
 
     @staticmethod
     def _records_to_data(records):
-        """Convert normalized gateway records into engine-friendly series.
-
-        Records are expected to contain OHLCV-style fields. Unknown fields
-        are preserved as additional scalar/list data where possible.
-        """
         if not records:
             return {}
 
@@ -130,7 +146,7 @@ class ApexOrchestrator:
             "high": ("high", "High"),
             "low": ("low", "Low"),
             "close": ("close", "Close", "price", "last_price"),
-            "volume": ("volume", "Volume"),
+            "volume": ("volume", "Volume", "trade_volume"),
         }
 
         for target, aliases in field_aliases.items():
@@ -155,6 +171,22 @@ class ApexOrchestrator:
         if timestamps:
             data["timestamps"] = timestamps
 
+        # Keep useful scalar gateway metadata available to engines/UI.
+        if ordered:
+            latest = ordered[-1]
+            for key in (
+                "price",
+                "change",
+                "change_pct",
+                "exchange",
+                "symbol_token",
+                "source",
+                "live",
+                "data_type",
+            ):
+                if key in latest:
+                    data[key] = latest[key]
+
         return data
 
     def build_market_context(
@@ -168,11 +200,6 @@ class ApexOrchestrator:
         horizon_minutes: int = 60,
         **kwargs,
     ):
-        """Fetch gateway data and build the single shared MarketContext.
-
-        No provider means an empty context with explicit gateway diagnostics.
-        No synthetic prices are generated.
-        """
         fetched = self.market_data.fetch(
             symbol=symbol,
             start=start,
@@ -228,6 +255,7 @@ class ApexOrchestrator:
                 "VALIDATE",
                 "BENCHMARK",
                 "REGISTER",
+                "MARKET_DATA",
                 "MASTER_BRAIN",
             ],
             "registered_engines": list(self.registry.all()),
@@ -239,7 +267,6 @@ class ApexOrchestrator:
             },
         }
 
-        # Explicit context always wins.
         if context is None and symbol:
             context = self.build_market_context(
                 symbol,
@@ -264,6 +291,7 @@ class ApexOrchestrator:
                 "timestamp": getattr(context, "timestamp", None),
                 "records": quality.get("count", 0),
                 "fresh": quality.get("fresh", False),
+                "source": getattr(context, "data", {}).get("market_data_source"),
             })
 
         return result
