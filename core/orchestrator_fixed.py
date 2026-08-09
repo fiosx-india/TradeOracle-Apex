@@ -437,6 +437,17 @@ class ApexOrchestrator:
             evidence=[],
         )
 
+        # Market-data quality is part of the shared runtime contract.
+        # Keep it in ``data`` for data/engine consumers, and expose the same
+        # canonical object at the MarketContext top level because
+        # ApexMasterBrain reads it from the shared context directly.
+        #
+        # This preserves backward compatibility with engines already using
+        # context.data while fixing the MarketData -> MasterBrain -> SignalGate
+        # contract.
+        context.market_data_quality = quality
+        context.market_data_source = fetched.get("source")
+
         # Secondary feeds are optional. Their failure must be visible but
         # must never silently replace or corrupt primary market data.
         if self.context_enricher is not None:
