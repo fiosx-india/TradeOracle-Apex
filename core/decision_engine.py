@@ -1,4 +1,11 @@
-"""Transparent directional decision layer with data-quality gating."""
+"""Decision engine for TradeOracle Apex.
+
+Converts fused evidence into a directional assessment and applies the final
+data-quality gate. It never places orders.
+"""
+from __future__ import annotations
+
+from typing import Any, Mapping
 
 from config import (
     DOWN_THRESHOLD,
@@ -11,16 +18,20 @@ from .signal_gate import SignalGate
 
 
 class DecisionEngine:
-    def __init__(self):
+    def __init__(self) -> None:
         self.gate = SignalGate(
             min_confidence=MIN_CONFIDENCE_FOR_SIGNAL,
             min_history=MIN_HISTORY_BARS,
             require_fresh=REQUIRE_FRESH_DATA_FOR_SIGNAL,
         )
 
-    def decide(self, fused, market_data_quality=None):
-        score = float(fused.get("score", 0.0))
-        confidence = float(fused.get("confidence", 0.0))
+    def decide(
+        self,
+        fused: Mapping[str, Any],
+        market_data_quality: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        score = float(fused.get("score", 0.0) or 0.0)
+        confidence = float(fused.get("confidence", 0.0) or 0.0)
 
         if score >= UP_THRESHOLD:
             direction = "UP"
@@ -29,11 +40,12 @@ class DecisionEngine:
         else:
             direction = "SIDEWAYS"
 
-        signal_strength = (
-            "STRONG" if confidence >= 0.80
-            else "MODERATE" if confidence >= MIN_CONFIDENCE_FOR_SIGNAL
-            else "WEAK"
-        )
+        if confidence >= 0.80:
+            signal_strength = "STRONG"
+        elif confidence >= MIN_CONFIDENCE_FOR_SIGNAL:
+            signal_strength = "MODERATE"
+        else:
+            signal_strength = "WEAK"
 
         decision = {
             "direction": direction,
