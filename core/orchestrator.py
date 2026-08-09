@@ -16,6 +16,7 @@ from plugins.plugin_loader import PluginLoader
 from plugins.plugin_validator import PluginValidator
 from plugins.plugin_benchmark import PluginBenchmark
 from data.market_data import MarketData
+from data.context_enricher import MarketContextEnricher
 
 try:
     from config import INCOMING_DIR, LIVE_DATA_MAX_AGE_SECONDS
@@ -33,6 +34,7 @@ class ApexOrchestrator:
         market_data: Optional[MarketData] = None,
         market_provider: Optional[Callable[..., Any]] = None,
         max_age_seconds: int = LIVE_DATA_MAX_AGE_SECONDS,
+        context_enricher: Optional[MarketContextEnricher] = None,
     ):
         self.incoming = incoming
         self.registry = SystemRegistry()
@@ -47,6 +49,7 @@ class ApexOrchestrator:
             registry=self.registry,
             router=self.router,
         )
+        self.context_enricher = context_enricher or MarketContextEnricher()
 
     # ------------------------------------------------------------------
     # BUILT-IN + INCOMING ENGINE REGISTRATION
@@ -221,7 +224,7 @@ class ApexOrchestrator:
             else datetime.now(timezone.utc).isoformat()
         )
 
-        return MarketContext(
+        context = MarketContext(
             timestamp=latest_timestamp,
             symbol=symbol or "",
             sector=sector or "",
@@ -229,6 +232,8 @@ class ApexOrchestrator:
             data=data,
             evidence=[],
         )
+        self.context_enricher.enrich(context)
+        return context
 
     # ------------------------------------------------------------------
     # PUBLIC RUNTIME
