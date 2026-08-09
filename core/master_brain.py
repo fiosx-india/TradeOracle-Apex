@@ -466,8 +466,15 @@ class ApexMasterBrain:
             evidence
         )
 
+        market_data_quality = self._get_context_value(
+            context,
+            "market_data_quality",
+            {},
+        )
+
         decision = self.decision.decide(
-            fused
+            fused,
+            market_data_quality=market_data_quality,
         )
 
         # --------------------------------------------------------------
