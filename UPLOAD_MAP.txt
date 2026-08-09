@@ -1,0 +1,38 @@
+TRADEORACLE APEX — ANGEL ONE LIVE DATA FILES
+
+Folder name:
+TradeOracle_Apex_AngelOne_LiveData
+
+Upload these files individually:
+
+1. streamlit_app.py
+   Destination: project root
+   Action: replace existing file
+
+2. config.py
+   Destination: project root
+   Action: replace existing file
+
+3. data/angelone_provider.py
+   Destination: data/
+   Action: add new file
+
+4. data/provider_loader.py
+   Destination: data/
+   Action: replace existing file
+
+5. requirements_angelone.txt
+   Destination: do NOT upload as-is.
+   Open it and add smartapi-python and pyotp to the existing requirements.txt.
+
+6. .streamlit/secrets.example.toml
+   Destination: example only.
+   Do NOT upload real credentials to GitHub.
+   Put the real values into Streamlit Cloud Secrets.
+
+Live mode:
+Set APEX_DATA_MODE=live in the Streamlit deployment environment.
+
+This first integration uses Angel One's LTP API for the readiness test.
+The provider also exposes SmartWebSocketV2 for the subsequent continuous
+streaming stage.
