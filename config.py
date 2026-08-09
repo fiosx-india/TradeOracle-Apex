@@ -2,17 +2,21 @@
 import os
 
 APP_NAME = "TradeOracle Apex"
-VERSION = "1.1.0"
+VERSION = "2.1.0"
 
 PREDICTION_HORIZON_MINUTES = int(
     os.getenv("APEX_HORIZON_MINUTES", "60")
 )
 
-# Provider-agnostic live-data configuration.
-# "demo" preserves the current diagnostic/demo behaviour.
-# "live" indicates that a real market-data provider is expected.
+# demo keeps diagnostic behaviour only.
+# live requires a real provider to be configured.
 DATA_MODE = os.getenv("APEX_DATA_MODE", "demo").strip().lower()
 DATA_PROVIDER = os.getenv("APEX_DATA_PROVIDER", "").strip()
+
+# Maximum acceptable age for incoming live market records.
+LIVE_DATA_MAX_AGE_SECONDS = int(
+    os.getenv("APEX_LIVE_DATA_MAX_AGE_SECONDS", "120")
+)
 
 INCOMING_DIR = os.getenv("APEX_INCOMING_DIR", "incoming")
 

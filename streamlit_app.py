@@ -7,8 +7,10 @@ from pathlib import Path
 
 import streamlit as st
 
+from config import LIVE_DATA_MAX_AGE_SECONDS
 from core.orchestrator import ApexOrchestrator
 from data.market_data import MarketData
+from data.provider_loader import load_market_provider
 from commodities.commodity_engine import CommodityEngine
 
 
@@ -42,15 +44,36 @@ def runtime_check() -> dict:
 
 
 def live_gateway_check() -> dict:
-    gateway = MarketData(provider=None, max_age_seconds=120)
-    result = gateway.fetch(limit=1)
-    return {
-        "provider_connected": gateway.provider is not None,
-        "status": result["quality"]["status"],
-        "fresh": result["quality"]["fresh"],
-        "records": result["quality"]["count"],
-        "source": result["source"],
-    }
+    """Check the configured provider through the canonical MarketData gateway."""
+    try:
+        provider = load_market_provider()
+
+        gateway = MarketData(
+            provider=provider,
+            max_age_seconds=LIVE_DATA_MAX_AGE_SECONDS,
+        )
+
+        result = gateway.fetch(limit=1)
+        quality = result.get("quality", {})
+
+        return {
+            "provider_connected": gateway.provider is not None,
+            "status": quality.get("status", "UNKNOWN"),
+            "fresh": bool(quality.get("fresh", False)),
+            "records": quality.get("count", 0),
+            "source": result.get("source"),
+            "error": None,
+        }
+
+    except Exception as exc:
+        return {
+            "provider_connected": False,
+            "status": "ERROR",
+            "fresh": False,
+            "records": 0,
+            "source": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
 
 def main() -> None:
@@ -75,6 +98,7 @@ def main() -> None:
         "core/master_brain.py",
         "core/market_context.py",
         "data/market_data.py",
+        "data/provider_loader.py",
         "commodities/commodity_engine.py",
         "plugins/plugin_loader.py",
         "requirements.txt",
@@ -87,6 +111,7 @@ def main() -> None:
     for i, item in enumerate(required):
         ok = file_check(item)
         architecture_ok = architecture_ok and ok
+
         with cols[i % 3]:
             if ok:
                 st.success(f"✓ {item}")
@@ -118,16 +143,24 @@ def main() -> None:
     live = live_gateway_check()
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Provider", "CONNECTED" if live["provider_connected"] else "NOT CONNECTED")
+    c1.metric(
+        "Provider",
+        "CONNECTED" if live["provider_connected"] else "NOT CONNECTED",
+    )
     c2.metric("Gateway", live["status"])
     c3.metric("Records", live["records"])
     c4.metric("Fresh", "YES" if live["fresh"] else "NO")
 
+    if live["source"]:
+        st.caption(f"Provider source: {live['source']}")
+
+    if live["error"]:
+        st.warning(live["error"])
+
     if not live["provider_connected"]:
         st.warning(
-            "No live provider is attached to MarketData. "
-            "The repository's gateway accepts a provider callback, "
-            "but the current code does not attach one by default."
+            "No live provider is configured. Set APEX_DATA_PROVIDER to a "
+            "real provider factory/class before expecting live market data."
         )
 
     st.header("4. Commodity engine")
