@@ -19,3 +19,4 @@ DOWN_THRESHOLD = float(os.getenv("APEX_DOWN_THRESHOLD", "-0.15"))
 MIN_CONFIDENCE_FOR_SIGNAL = float(
     os.getenv("APEX_MIN_CONFIDENCE", "0.60")
 )
+
