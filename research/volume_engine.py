@@ -96,6 +96,22 @@ class VolumeEngine:
 
         n = min(len(close), len(volume))
         close, volume = close[-n:], volume[-n:]
+
+        # Index instruments can legitimately have no traded volume. Do not
+        # fabricate relative-volume evidence from an all-zero series.
+        if not any(v > 0 for v in volume):
+            price_change = _safe_ratio(close[-1] - close[-2], abs(close[-2]))
+            score = _clamp(price_change * 6.0)
+            confidence = min(0.55, 0.20 + min(0.25, n / 100.0))
+            return _result(
+                self.name,
+                score,
+                "volume_unavailable_for_instrument; price_only_confirmation",
+                weight=0.55,
+                confidence=confidence,
+                relative_volume=None,
+                volume_available=False,
+            )
         baseline = _mean(volume[-21:-1]) if len(volume) > 1 else _mean(volume)
         rv = _safe_ratio(volume[-1], baseline, 1.0)
         price_change = _safe_ratio(close[-1]-close[-2], abs(close[-2]))
