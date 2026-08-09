@@ -34,3 +34,13 @@ DOWN_THRESHOLD = float(os.getenv("APEX_DOWN_THRESHOLD", "-0.15"))
 MIN_CONFIDENCE_FOR_SIGNAL = float(
     os.getenv("APEX_MIN_CONFIDENCE", "0.60")
 )
+
+
+# Runtime signal-quality controls.
+# Directional output is withheld when the market data contract is not strong
+# enough to support a fresh signal.
+MIN_HISTORY_BARS = int(os.getenv("APEX_MIN_HISTORY_BARS", "30"))
+REQUIRE_FRESH_DATA_FOR_SIGNAL = os.getenv(
+    "APEX_REQUIRE_FRESH_DATA_FOR_SIGNAL", "true"
+).strip().lower() not in {"0", "false", "no", "off"}
+NEWS_LOOKBACK_HOURS = int(os.getenv("APEX_NEWS_LOOKBACK_HOURS", "24"))
