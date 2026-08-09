@@ -1,10 +1,24 @@
-"""Transparent directional decision layer."""
+"""Transparent directional decision layer with data-quality gating."""
 
-from config import DOWN_THRESHOLD, MIN_CONFIDENCE_FOR_SIGNAL, UP_THRESHOLD
+from config import (
+    DOWN_THRESHOLD,
+    MIN_CONFIDENCE_FOR_SIGNAL,
+    MIN_HISTORY_BARS,
+    REQUIRE_FRESH_DATA_FOR_SIGNAL,
+    UP_THRESHOLD,
+)
+from .signal_gate import SignalGate
 
 
 class DecisionEngine:
-    def decide(self, fused):
+    def __init__(self):
+        self.gate = SignalGate(
+            min_confidence=MIN_CONFIDENCE_FOR_SIGNAL,
+            min_history=MIN_HISTORY_BARS,
+            require_fresh=REQUIRE_FRESH_DATA_FOR_SIGNAL,
+        )
+
+    def decide(self, fused, market_data_quality=None):
         score = float(fused.get("score", 0.0))
         confidence = float(fused.get("confidence", 0.0))
 
@@ -21,7 +35,7 @@ class DecisionEngine:
             else "WEAK"
         )
 
-        return {
+        decision = {
             "direction": direction,
             "score": round(score, 6),
             "confidence": round(confidence, 6),
@@ -31,3 +45,4 @@ class DecisionEngine:
             "evidence": fused.get("evidence", []),
             "explainable": True,
         }
+        return self.gate.apply(decision, market_data_quality)
