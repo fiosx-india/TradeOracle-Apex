@@ -1,30 +1,23 @@
-"""Provider loader for TradeOracle Apex.
-
-The loader is vendor-neutral. It never creates synthetic market data.
-
-Configure a provider with:
-
-    APEX_DATA_PROVIDER=module.path:factory_or_class
-
-The target must be importable from the running application. The configured
-factory/class may read provider credentials from environment variables or
-its own configuration mechanism.
-"""
+"""Provider loader for TradeOracle Apex."""
 
 from __future__ import annotations
 
 import importlib
 from typing import Any, Optional
 
-from config import DATA_PROVIDER
+from config import DATA_MODE, DATA_PROVIDER
 
 
 def load_market_provider(spec: Optional[str] = None) -> Any:
-    """Load and instantiate the configured market-data provider.
+    """Load the configured market-data provider.
 
-    Returns None when no provider is configured.
+    Live mode defaults to the bundled Angel One provider. Demo mode remains
+    provider-free unless an explicit provider is configured.
     """
     target = (spec if spec is not None else DATA_PROVIDER).strip()
+
+    if not target and DATA_MODE == "live":
+        target = "data.angelone_provider:AngelOneProvider"
 
     if not target:
         return None
