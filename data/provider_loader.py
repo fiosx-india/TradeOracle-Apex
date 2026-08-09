@@ -11,8 +11,8 @@ from config import DATA_MODE, DATA_PROVIDER
 def load_market_provider(spec: Optional[str] = None) -> Any:
     """Load the configured market-data provider.
 
-    Live mode defaults to the bundled Angel One provider. Demo mode remains
-    provider-free unless an explicit provider is configured.
+    In live mode, Angel One is the bundled default. No fallback/demo provider
+    is silently substituted.
     """
     target = (spec if spec is not None else DATA_PROVIDER).strip()
 
@@ -28,7 +28,6 @@ def load_market_provider(spec: Optional[str] = None) -> Any:
         )
 
     module_name, attribute_name = target.split(":", 1)
-
     if not module_name or not attribute_name:
         raise ValueError(
             "APEX_DATA_PROVIDER must contain both module and factory/class"
