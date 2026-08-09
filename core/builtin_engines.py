@@ -10,6 +10,10 @@ from prediction import (
     PredictionEngine,
     ReversalEngine,
     SixtyMinuteEngine,
+    MovementPathEngine,
+    EnsembleEngine,
+    ProbabilityEngine,
+    RankingEngine,
 )
 
 from research import (
@@ -28,7 +32,10 @@ from research import (
 
 
 BUILTIN_ENGINE_CLASSES = (
-    # Research evidence stage.
+    # ---------------------------------------------------------
+    # RESEARCH EVIDENCE
+    # ---------------------------------------------------------
+
     TechnicalEngine,
     MomentumEngine,
     VolumeEngine,
@@ -41,13 +48,30 @@ BUILTIN_ENGINE_CLASSES = (
     GlobalImpactEngine,
     CorrelationEngine,
 
-    # Primary prediction stage.
+    # ---------------------------------------------------------
+    # PRIMARY PREDICTION
+    # ---------------------------------------------------------
+
     PredictionEngine,
     BreakoutEngine,
     EarlyMovementEngine,
     ReversalEngine,
     SixtyMinuteEngine,
+
+    # ---------------------------------------------------------
+    # DERIVED / META ANALYSIS
+    #
+    # These engines consume upstream evidence and must NOT be
+    # treated as independent voting engines by ApexMasterBrain.
+    # ---------------------------------------------------------
+
+    MovementPathEngine,
+    EnsembleEngine,
+    ProbabilityEngine,
+    RankingEngine,
 )
 
 
-__all__ = ["BUILTIN_ENGINE_CLASSES"]
+__all__ = [
+    "BUILTIN_ENGINE_CLASSES",
+]
