@@ -28,6 +28,9 @@ python-telegram-bot>=22.0
 openai>=1.97.0
 google-generativeai>=0.8.5
 
-# Angel One SmartAPI live market data
-smartapi-python
-pyotp
+# Angel One SmartAPI read-only market data
+smartapi-python>=1.5.5
+pyotp>=2.10.0
+websocket-client>=1.8.0
+logzero>=1.7.0
+pycryptodome>=3.20.0
