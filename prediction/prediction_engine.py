@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
-import statistics
 
 
 def _data(ctx) -> dict[str, Any]:
@@ -16,7 +16,11 @@ def _get(ctx, key: str, default=None):
     return getattr(ctx, key, default)
 
 
-def _clamp(value: float, low: float = -1.0, high: float = 1.0) -> float:
+def _clamp(
+    value: float,
+    low: float = -1.0,
+    high: float = 1.0,
+) -> float:
     try:
         value = float(value)
     except (TypeError, ValueError):
@@ -25,7 +29,10 @@ def _clamp(value: float, low: float = -1.0, high: float = 1.0) -> float:
     return max(low, min(high, value))
 
 
-def _safe_float(value: Any, default: float = 0.0) -> float:
+def _safe_float(
+    value: Any,
+    default: float = 0.0,
+) -> float:
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -36,8 +43,7 @@ def _evidence(ctx) -> list[dict[str, Any]]:
     value = _get(ctx, "research_evidence", None)
 
     if not isinstance(value, list):
-        data = _data(ctx)
-        value = data.get("research_evidence", [])
+        value = _data(ctx).get("research_evidence", [])
 
     if not isinstance(value, list):
         return []
@@ -74,24 +80,26 @@ def _result(
 
 class PredictionEngine:
     """
-    Primary prediction-stage fusion engine.
+    Primary forward-looking prediction fusion engine.
 
-    Purpose:
-    - Convert usable research evidence into a forward-looking
-      directional forecast.
-    - Do not manufacture probability claims.
-    - Do not treat unavailable/failed research engines as evidence.
-    - Preserve explainability.
-    - Leave statistical calibration to the validation/calibration layer.
+    Converts usable research evidence into a directional
+    forecast for the configured future horizon.
 
-    This engine produces a model-derived directional forecast.
-    It is NOT a historically calibrated probability model.
+    Important:
+    - This is a model-derived forecast.
+    - It is NOT a calibrated probability.
+    - It does NOT guarantee a future market outcome.
+    - Failed/unavailable evidence is excluded.
+    - Historical calibration belongs to the validation layer.
     """
 
     name = "PredictionEngine"
-    version = "2.1.0"
+    version = "2.2.0"
 
-    capabilities = ["PREDICTION"]
+    capabilities = [
+        "PREDICTION",
+        "FORWARD_FORECAST",
+    ]
 
     def self_test(self) -> bool:
         return True
@@ -107,24 +115,31 @@ class PredictionEngine:
         if horizon_minutes <= 0:
             horizon_minutes = 60.0
 
+        horizon_minutes = int(horizon_minutes)
+
+        issued_at = datetime.now(timezone.utc).isoformat()
+
         usable: list[dict[str, Any]] = []
         rejected: list[dict[str, Any]] = []
 
         for item in evidence:
             engine_name = str(
-                item.get("engine", "UnknownEngine")
+                item.get(
+                    "engine",
+                    "UnknownEngine",
+                )
             )
 
             score = _clamp(
                 _safe_float(
-                    item.get("score", 0.0)
+                    item.get("score", 0.0),
                 )
             )
 
             weight = max(
                 0.0,
                 _safe_float(
-                    item.get("weight", 0.0)
+                    item.get("weight", 0.0),
                 ),
             )
 
@@ -133,7 +148,7 @@ class PredictionEngine:
                 min(
                     1.0,
                     _safe_float(
-                        item.get("confidence", 0.0)
+                        item.get("confidence", 0.0),
                     ),
                 ),
             )
@@ -145,8 +160,10 @@ class PredictionEngine:
                 )
             )
 
-            # Failed/unavailable engines must not become
-            # neutral evidence with artificial influence.
+            # ------------------------------------------------------
+            # HARD REJECTION RULES
+            # ------------------------------------------------------
+
             if weight <= 0.0:
                 rejected.append(
                     {
@@ -165,6 +182,30 @@ class PredictionEngine:
                 )
                 continue
 
+            # Explicit unavailable/failed status must never
+            # silently become prediction evidence.
+            status = str(
+                item.get(
+                    "status",
+                    "AVAILABLE",
+                )
+            ).upper()
+
+            if status in {
+                "FAILED",
+                "ERROR",
+                "UNAVAILABLE",
+                "INVALID",
+                "STALE",
+            }:
+                rejected.append(
+                    {
+                        "engine": engine_name,
+                        "reason": f"engine_status_{status.lower()}",
+                    }
+                )
+                continue
+
             usable.append(
                 {
                     "engine": engine_name,
@@ -175,6 +216,10 @@ class PredictionEngine:
                 }
             )
 
+        # ----------------------------------------------------------
+        # NO USABLE EVIDENCE
+        # ----------------------------------------------------------
+
         if not usable:
             return _result(
                 self.name,
@@ -183,15 +228,23 @@ class PredictionEngine:
                 "No usable research evidence is available.",
                 0.0,
                 direction="SIDEWAYS",
-                horizon_minutes=int(horizon_minutes),
+                horizon_minutes=horizon_minutes,
                 forecast_valid=False,
+                forecast_type="FORWARD_DIRECTIONAL",
+                issued_at=issued_at,
                 evidence_count=len(evidence),
                 usable_evidence_count=0,
                 rejected_evidence_count=len(rejected),
                 agreement=0.0,
                 evidence_quality=0.0,
                 calibration_status="NOT_CALIBRATED",
+                contributing_engines=[],
+                rejected_engines=rejected,
             )
+
+        # ----------------------------------------------------------
+        # WEIGHTED FORWARD SCORE
+        # ----------------------------------------------------------
 
         weighted_scores = [
             item["score"]
@@ -216,18 +269,26 @@ class PredictionEngine:
                 "Usable evidence has no effective weight.",
                 0.0,
                 direction="SIDEWAYS",
-                horizon_minutes=int(horizon_minutes),
+                horizon_minutes=horizon_minutes,
                 forecast_valid=False,
+                forecast_type="FORWARD_DIRECTIONAL",
+                issued_at=issued_at,
                 evidence_count=len(evidence),
                 usable_evidence_count=len(usable),
                 rejected_evidence_count=len(rejected),
                 agreement=0.0,
                 evidence_quality=0.0,
                 calibration_status="NOT_CALIBRATED",
+                contributing_engines=[],
+                rejected_engines=rejected,
             )
 
         score = sum(weighted_scores) / total_weight
         score = _clamp(score)
+
+        # ----------------------------------------------------------
+        # DIRECTIONAL AGREEMENT
+        # ----------------------------------------------------------
 
         positive_weight = sum(
             item["weight"] * item["confidence"]
@@ -242,14 +303,18 @@ class PredictionEngine:
         )
 
         directional_weight = (
-            positive_weight + negative_weight
+            positive_weight
+            + negative_weight
         )
 
         if directional_weight > 0:
-            agreement = max(
-                positive_weight,
-                negative_weight,
-            ) / directional_weight
+            agreement = (
+                max(
+                    positive_weight,
+                    negative_weight,
+                )
+                / directional_weight
+            )
         else:
             agreement = 0.0
 
@@ -257,6 +322,10 @@ class PredictionEngine:
             0.0,
             min(1.0, agreement),
         )
+
+        # ----------------------------------------------------------
+        # EVIDENCE QUALITY
+        # ----------------------------------------------------------
 
         average_confidence = (
             sum(
@@ -268,7 +337,8 @@ class PredictionEngine:
 
         coverage = min(
             1.0,
-            len(usable) / max(1.0, len(evidence)),
+            len(usable)
+            / max(1.0, len(evidence)),
         )
 
         evidence_quality = (
@@ -277,11 +347,12 @@ class PredictionEngine:
             * coverage
         )
 
-        # Conservative model-derived confidence.
+        # ----------------------------------------------------------
+        # MODEL-DERIVED CONFIDENCE
         #
-        # This is intentionally NOT called a calibrated
-        # probability. Calibration belongs to the validation
-        # layer and must be based on historical outcomes.
+        # This is deliberately NOT probability.
+        # ----------------------------------------------------------
+
         confidence = (
             0.10
             + 0.35 * abs(score)
@@ -296,12 +367,20 @@ class PredictionEngine:
             min(0.95, confidence),
         )
 
+        # ----------------------------------------------------------
+        # FORWARD DIRECTION
+        # ----------------------------------------------------------
+
         if score >= 0.12:
             direction = "UP"
         elif score <= -0.12:
             direction = "DOWN"
         else:
             direction = "SIDEWAYS"
+
+        # ----------------------------------------------------------
+        # FORECAST VALIDITY
+        # ----------------------------------------------------------
 
         if direction == "SIDEWAYS":
             forecast_valid = (
@@ -314,10 +393,19 @@ class PredictionEngine:
                 and agreement >= 0.55
             )
 
+        # ----------------------------------------------------------
+        # EXPLAINABILITY
+        # ----------------------------------------------------------
+
         reasons = [
             item["reason"]
             for item in usable
             if item.get("reason")
+        ]
+
+        contributing_engines = [
+            item["engine"]
+            for item in usable
         ]
 
         return _result(
@@ -325,13 +413,15 @@ class PredictionEngine:
             score,
             confidence,
             (
-                f"Forward {int(horizon_minutes)}-minute "
-                f"directional forecast from "
+                f"Forward {horizon_minutes}-minute "
+                f"directional forecast generated from "
                 f"{len(usable)} usable research signals."
             ),
             1.1,
             direction=direction,
-            horizon_minutes=int(horizon_minutes),
+            horizon_minutes=horizon_minutes,
+            forecast_type="FORWARD_DIRECTIONAL",
+            issued_at=issued_at,
             forecast_valid=forecast_valid,
             evidence_count=len(evidence),
             usable_evidence_count=len(usable),
@@ -346,10 +436,7 @@ class PredictionEngine:
                 6,
             ),
             calibration_status="NOT_CALIBRATED",
-            contributing_engines=[
-                item["engine"]
-                for item in usable
-            ],
+            contributing_engines=contributing_engines,
             rejected_engines=rejected,
             evidence_reasons=reasons,
         )
