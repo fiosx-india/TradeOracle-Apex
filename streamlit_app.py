@@ -15,12 +15,12 @@ from config import (
     ANGELONE_SYMBOL,
     DATA_MODE,
     LIVE_DATA_MAX_AGE_SECONDS,
+    MIN_HISTORY_BARS,
     PREDICTION_HORIZON_MINUTES,
 )
 from core.orchestrator import ApexOrchestrator
 from data.market_data import MarketData
 from data.provider_loader import load_market_provider
-from data.context_enricher import MarketContextEnricher
 
 ROOT = Path(__file__).resolve().parent
 IST = ZoneInfo("Asia/Kolkata")
@@ -64,7 +64,6 @@ def run_analysis(provider, symbol: str) -> dict:
     orchestrator = ApexOrchestrator(
         market_data=gateway,
         max_age_seconds=LIVE_DATA_MAX_AGE_SECONDS,
-        context_enricher=MarketContextEnricher(),
     )
     return orchestrator.run(
         symbol=symbol,
@@ -171,7 +170,7 @@ def main() -> None:
     c.metric("Fresh", "YES" if md.get("fresh") else "NO")
     d.metric("Source", md.get("source") or "—")
 
-    min_history = 30
+    min_history = MIN_HISTORY_BARS
     if md.get("records", 0) < min_history:
         st.warning(
             f"Prediction is withheld until at least {min_history} valid candles "
@@ -184,7 +183,6 @@ def main() -> None:
         direction = decision.get("direction", "UNKNOWN")
         confidence = float(decision.get("confidence", 0.0)) * 100.0
         score = decision.get("score", 0.0)
-        decision_status = decision.get("decision_status", "UNKNOWN")
 
         st.subheader("Current AI assessment")
 
@@ -193,12 +191,7 @@ def main() -> None:
         p2.metric("Confidence", f"{confidence:.1f}%")
         p3.metric("Score", f"{float(score):.4f}")
 
-        if decision_status == "WITHHELD":
-            st.warning(
-                "Directional signal withheld: "
-                + "; ".join(decision.get("gate_reasons", []))
-            )
-        elif direction == "UP":
+        if direction == "UP":
             st.success("UP — research/prediction evidence currently leans upward.")
         elif direction == "DOWN":
             st.error("DOWN — research/prediction evidence currently leans downward.")
