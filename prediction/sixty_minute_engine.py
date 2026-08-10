@@ -1,35 +1,42 @@
 from __future__ import annotations
 
 import statistics
+from typing import Any
 
 
-def _data(ctx):
+def _data(ctx: Any) -> dict:
     data = getattr(ctx, "data", None)
     return data if isinstance(data, dict) else {}
 
 
-def _series(ctx, *keys):
+def _series(ctx: Any, *keys: str) -> list[float]:
     data = _data(ctx)
 
     for key in keys:
         values = data.get(key)
 
-        if isinstance(values, (list, tuple)):
-            output = []
+        if not isinstance(values, (list, tuple)):
+            continue
 
-            for value in values:
-                try:
-                    output.append(float(value))
-                except (TypeError, ValueError):
-                    continue
+        result = []
 
-            if output:
-                return output
+        for value in values:
+            try:
+                result.append(float(value))
+            except (TypeError, ValueError):
+                continue
+
+        if result:
+            return result
 
     return []
 
 
-def _clamp(value, low=-1.0, high=1.0):
+def _clamp(
+    value: float,
+    low: float = -1.0,
+    high: float = 1.0,
+) -> float:
     try:
         value = float(value)
     except (TypeError, ValueError):
@@ -38,36 +45,35 @@ def _clamp(value, low=-1.0, high=1.0):
     return max(low, min(high, value))
 
 
-def _ratio(a, b, default=0.0):
-    return a / b if b else default
+def _safe_ratio(
+    numerator: float,
+    denominator: float,
+    default: float = 0.0,
+) -> float:
+    if not denominator:
+        return default
+
+    return numerator / denominator
 
 
-def _prediction_evidence(ctx):
-    """
-    Use completed primary prediction evidence.
+def _evidence(ctx: Any) -> list[dict]:
+    evidence = getattr(ctx, "research_evidence", None)
 
-    The 60-minute engine is a META/DERIVED engine.
-    Therefore it must consume the prediction stage,
-    not accidentally fall back to raw research evidence.
-    """
-
-    value = getattr(ctx, "prediction_evidence", None)
-
-    if isinstance(value, list):
+    if isinstance(evidence, list):
         return [
             item
-            for item in value
+            for item in evidence
             if isinstance(item, dict)
         ]
 
     data = _data(ctx)
 
-    value = data.get("prediction_evidence")
+    evidence = data.get("research_evidence")
 
-    if isinstance(value, list):
+    if isinstance(evidence, list):
         return [
             item
-            for item in value
+            for item in evidence
             if isinstance(item, dict)
         ]
 
@@ -75,13 +81,13 @@ def _prediction_evidence(ctx):
 
 
 def _result(
-    engine,
-    score,
-    confidence,
-    reason,
-    weight=1.0,
-    **extra,
-):
+    engine: str,
+    score: float,
+    confidence: float,
+    reason: str,
+    weight: float = 1.0,
+    **extra: Any,
+) -> dict:
     result = {
         "engine": engine,
         "score": round(_clamp(score), 6),
@@ -100,15 +106,13 @@ def _result(
 
 class SixtyMinuteEngine:
     """
-    Rolling 60-minute directional forecast.
+    Forecast the directional bias for the next 60 minutes.
 
-    The engine estimates the direction over the NEXT
-    60 minutes from the currently available primary
-    prediction evidence and recent market volatility.
+    This engine produces a model-derived forecast from the evidence
+    available at the current market timestamp.
 
-    This is a model-derived forecast.
-    It is NOT a statistically calibrated probability
-    unless historical calibration has been performed.
+    It does not claim historical probability calibration and it does
+    not guarantee the future market outcome.
     """
 
     name = "SixtyMinuteEngine"
@@ -117,44 +121,39 @@ class SixtyMinuteEngine:
     capabilities = [
         "PREDICTION",
         "60_MINUTE",
+        "FORWARD_FORECAST",
     ]
 
-    def self_test(self):
+    def self_test(self) -> bool:
         return True
 
-    def predict(self, context):
-        evidence = _prediction_evidence(context)
+    def predict(self, context: Any) -> dict:
+        evidence = _evidence(context)
 
         if not evidence:
             return _result(
                 self.name,
                 0.0,
-                0.0,
-                "No primary prediction evidence available",
-                0.0,
+                0.05,
+                "Insufficient evidence for 60-minute forecast",
+                1.2,
                 direction="SIDEWAYS",
                 horizon_minutes=60,
-                forecast_status="WITHHELD",
+                forecast_type="MODEL_DERIVED",
             )
 
-        usable = []
+        weighted_scores = []
+        weighted_confidences = []
 
         for item in evidence:
             try:
                 score = _clamp(
-                    item.get("score", 0.0)
+                    float(item.get("score", 0.0))
                 )
+            except (TypeError, ValueError):
+                score = 0.0
 
-                weight = max(
-                    0.0,
-                    float(
-                        item.get(
-                            "weight",
-                            1.0,
-                        )
-                    ),
-                )
-
+            try:
                 confidence = max(
                     0.0,
                     min(
@@ -167,92 +166,132 @@ class SixtyMinuteEngine:
                         ),
                     ),
                 )
+            except (TypeError, ValueError):
+                confidence = 0.0
 
-            except (
-                TypeError,
-                ValueError,
-            ):
-                continue
-
-            if weight <= 0.0 or confidence <= 0.0:
-                continue
-
-            usable.append(
-                (
-                    score,
-                    weight,
-                    confidence,
+            try:
+                weight = max(
+                    0.0,
+                    float(
+                        item.get(
+                            "weight",
+                            1.0,
+                        )
+                    ),
                 )
+            except (TypeError, ValueError):
+                weight = 1.0
+
+            effective_weight = (
+                weight * confidence
             )
 
-        if not usable:
+            if effective_weight <= 0:
+                continue
+
+            weighted_scores.append(
+                score * effective_weight
+            )
+
+            weighted_confidences.append(
+                effective_weight
+            )
+
+        total_weight = sum(
+            weighted_confidences
+        )
+
+        if total_weight <= 0:
             return _result(
                 self.name,
                 0.0,
-                0.0,
-                "Primary prediction evidence is not usable",
-                0.0,
+                0.05,
+                "Available evidence has no usable confidence",
+                1.2,
                 direction="SIDEWAYS",
                 horizon_minutes=60,
-                forecast_status="WITHHELD",
+                forecast_type="MODEL_DERIVED",
             )
 
-        weighted_scores = [
-            score * weight * confidence
-            for score, weight, confidence in usable
-        ]
-
-        effective_weights = [
-            weight * confidence
-            for _, weight, confidence in usable
-        ]
-
-        total_weight = sum(
-            effective_weights
-        )
-
-        score = _ratio(
+        score = _safe_ratio(
             sum(weighted_scores),
             total_weight,
         )
 
-        positive_weight = sum(
-            weight
-            for score_value, weight, _ in usable
-            if score_value > 0.05
-        )
+        positive_weight = 0.0
+        negative_weight = 0.0
 
-        negative_weight = sum(
-            weight
-            for score_value, weight, _ in usable
-            if score_value < -0.05
-        )
+        for item in evidence:
+            try:
+                item_score = float(
+                    item.get("score", 0.0)
+                )
+            except (TypeError, ValueError):
+                item_score = 0.0
 
-        agreement = _ratio(
+            try:
+                confidence = max(
+                    0.0,
+                    min(
+                        1.0,
+                        float(
+                            item.get(
+                                "confidence",
+                                0.0,
+                            )
+                        ),
+                    ),
+                )
+            except (TypeError, ValueError):
+                confidence = 0.0
+
+            try:
+                weight = max(
+                    0.0,
+                    float(
+                        item.get(
+                            "weight",
+                            1.0,
+                        )
+                    ),
+                )
+            except (TypeError, ValueError):
+                weight = 1.0
+
+            effective_weight = (
+                weight * confidence
+            )
+
+            if item_score > 0.05:
+                positive_weight += effective_weight
+
+            elif item_score < -0.05:
+                negative_weight += effective_weight
+
+        agreement = _safe_ratio(
             max(
                 positive_weight,
                 negative_weight,
             ),
-            sum(
-                weight
-                for _, weight, _ in usable
-            ),
+            total_weight,
         )
 
-        direction = (
-            "UP"
-            if score >= 0.12
-            else "DOWN"
-            if score <= -0.12
-            else "SIDEWAYS"
-        )
+        if score >= 0.12:
+            direction = "UP"
 
-        # This is model confidence, NOT calibrated probability.
+        elif score <= -0.12:
+            direction = "DOWN"
+
+        else:
+            direction = "SIDEWAYS"
+
+        # This is intentionally a model-confidence estimate.
+        # It is NOT presented as statistically calibrated probability.
         confidence = min(
-            0.97,
+            0.95,
             0.20
             + 0.55 * abs(score)
-            + 0.35 * agreement,
+            + 0.30 * agreement,
         )
 
         close = _series(
@@ -266,18 +305,21 @@ class SixtyMinuteEngine:
         volatility = 0.0
 
         if len(close) >= 6:
-            returns = [
-                _ratio(
-                    current - previous,
-                    abs(previous),
+            returns = []
+
+            for previous, current in zip(
+                close[-6:-1],
+                close[-5:],
+            ):
+                if previous == 0:
+                    continue
+
+                returns.append(
+                    _safe_ratio(
+                        current - previous,
+                        abs(previous),
+                    )
                 )
-                for previous, current
-                in zip(
-                    close[-6:-1],
-                    close[-5:],
-                )
-                if previous
-            ]
 
             if len(returns) > 1:
                 volatility = statistics.pstdev(
@@ -298,14 +340,14 @@ class SixtyMinuteEngine:
             score,
             confidence,
             (
-                "Rolling 60-minute forecast from "
-                f"{len(usable)} primary prediction engines; "
+                "60-minute forward forecast "
                 f"score={score:.3f}, "
                 f"agreement={agreement:.2f}"
             ),
             1.25,
             direction=direction,
             horizon_minutes=60,
+            forecast_type="MODEL_DERIVED",
             expected_return=round(
                 expected_return,
                 6,
@@ -321,7 +363,6 @@ class SixtyMinuteEngine:
                 ),
                 6,
             ),
-            forecast_status="ACTIVE",
         )
 
     analyze = predict
