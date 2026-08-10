@@ -417,13 +417,6 @@ class AngelOneProvider:
             self.feed_token,
         )
 
-
-    @staticmethod
-    def _previous_trading_day(day):
-        while day.weekday() >= 5:
-            day = day - timedelta(days=1)
-        return day
-
     def health(self) -> dict[str, Any]:
         return {
             "engine": self.name,
