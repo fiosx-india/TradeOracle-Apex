@@ -5,29 +5,85 @@ import statistics
 from typing import Any
 
 
+# ---------------------------------------------------------------------------
+# SUPPORTED HORIZONS
+# ---------------------------------------------------------------------------
+
 SUPPORTED_HORIZONS = (5, 15, 30, 60)
 
 
+# ---------------------------------------------------------------------------
+# CONTEXT HELPERS
+# ---------------------------------------------------------------------------
+
 def _data(context) -> dict[str, Any]:
-    data = getattr(context, "data", None)
-    return data if isinstance(data, dict) else {}
+    data = getattr(
+        context,
+        "data",
+        None,
+    )
+
+    if isinstance(data, dict):
+        return data
+
+    if isinstance(context, dict):
+        value = context.get("data")
+
+        if isinstance(value, dict):
+            return value
+
+    return {}
 
 
-def _series(context, *keys) -> list[float]:
+def _get(
+    context,
+    key: str,
+    default=None,
+):
+    if isinstance(context, dict):
+        return context.get(
+            key,
+            default,
+        )
+
+    return getattr(
+        context,
+        key,
+        default,
+    )
+
+
+def _series(
+    context,
+    *keys: str,
+) -> list[float]:
+
     data = _data(context)
 
     for key in keys:
+
         value = data.get(key)
 
-        if not isinstance(value, (list, tuple)):
+        if not isinstance(
+            value,
+            (list, tuple),
+        ):
             continue
 
         result: list[float] = []
 
         for item in value:
+
             try:
-                result.append(float(item))
-            except (TypeError, ValueError):
+                number = float(item)
+
+                if math.isfinite(number):
+                    result.append(number)
+
+            except (
+                TypeError,
+                ValueError,
+            ):
                 continue
 
         if result:
@@ -36,17 +92,39 @@ def _series(context, *keys) -> list[float]:
     return []
 
 
+def _safe_float(
+    value: Any,
+    default: float = 0.0,
+) -> float:
+
+    try:
+        number = float(value)
+
+        if not math.isfinite(number):
+            return default
+
+        return number
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return default
+
+
 def _clamp(
     value: float,
     low: float = -1.0,
     high: float = 1.0,
 ) -> float:
-    try:
-        value = float(value)
-    except (TypeError, ValueError):
-        value = 0.0
 
-    return max(low, min(high, value))
+    return max(
+        low,
+        min(
+            high,
+            _safe_float(value),
+        ),
+    )
 
 
 def _ratio(
@@ -54,42 +132,58 @@ def _ratio(
     denominator: float,
     default: float = 0.0,
 ) -> float:
+
     if denominator == 0:
         return default
 
     return numerator / denominator
 
 
-def _safe_float(
-    value: Any,
-    default: float = 0.0,
-) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
+# ---------------------------------------------------------------------------
+# HORIZON
+# ---------------------------------------------------------------------------
 
 def _get_horizon(context) -> int:
     """
-    Read the prediction horizon from MarketContext.
+    The shared MarketContext is the authoritative source
+    of the prediction horizon.
 
-    The orchestrator is responsible for creating separate contexts
-    for 5, 15, 30 and 60 minutes.
+    Supported:
+        5
+        15
+        30
+        60
+
+    No silent fallback is allowed.
     """
 
-    raw = getattr(
+    raw = _get(
         context,
         "horizon_minutes",
-        5,
+        None,
     )
+
+    if raw is None:
+        raise ValueError(
+            "SixtyMinuteEngine requires "
+            "context.horizon_minutes."
+        )
 
     try:
         horizon = int(raw)
-    except (TypeError, ValueError):
-        horizon = 5
+
+    except (
+        TypeError,
+        ValueError,
+    ) as exc:
+
+        raise ValueError(
+            "context.horizon_minutes must be "
+            "an integer."
+        ) from exc
 
     if horizon not in SUPPORTED_HORIZONS:
+
         raise ValueError(
             "Unsupported prediction horizon: "
             f"{horizon}. Supported horizons: "
@@ -99,18 +193,22 @@ def _get_horizon(context) -> int:
     return horizon
 
 
-def _evidence(context) -> list[dict[str, Any]]:
-    """
-    Read research evidence from the shared MarketContext.
-    """
+# ---------------------------------------------------------------------------
+# EVIDENCE
+# ---------------------------------------------------------------------------
 
-    value = getattr(
+def _evidence(
+    context,
+) -> list[dict[str, Any]]:
+
+    value = _get(
         context,
         "research_evidence",
         None,
     )
 
     if isinstance(value, list):
+
         return [
             item
             for item in value
@@ -120,10 +218,12 @@ def _evidence(context) -> list[dict[str, Any]]:
     data = _data(context)
 
     value = data.get(
-        "research_evidence"
+        "research_evidence",
+        [],
     )
 
     if isinstance(value, list):
+
         return [
             item
             for item in value
@@ -133,13 +233,137 @@ def _evidence(context) -> list[dict[str, Any]]:
     return []
 
 
+def _prepare_evidence(
+    evidence: list[dict[str, Any]],
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    """
+    Separate usable and rejected evidence.
+
+    Failed/stale/invalid evidence must never silently
+    become a prediction vote.
+    """
+
+    usable: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+
+    invalid_statuses = {
+        "FAILED",
+        "ERROR",
+        "UNAVAILABLE",
+        "INVALID",
+        "STALE",
+    }
+
+    for item in evidence:
+
+        engine_name = str(
+            item.get(
+                "engine",
+                "UnknownEngine",
+            )
+        )
+
+        status = str(
+            item.get(
+                "status",
+                "AVAILABLE",
+            )
+        ).upper()
+
+        if status in invalid_statuses:
+
+            rejected.append(
+                {
+                    "engine": engine_name,
+                    "reason": (
+                        "engine_status_"
+                        f"{status.lower()}"
+                    ),
+                }
+            )
+
+            continue
+
+        score = _clamp(
+            _safe_float(
+                item.get(
+                    "score",
+                    0.0,
+                )
+            )
+        )
+
+        weight = max(
+            0.0,
+            _safe_float(
+                item.get(
+                    "weight",
+                    0.0,
+                )
+            ),
+        )
+
+        confidence = max(
+            0.0,
+            min(
+                1.0,
+                _safe_float(
+                    item.get(
+                        "confidence",
+                        0.0,
+                    )
+                ),
+            ),
+        )
+
+        if weight <= 0.0:
+
+            rejected.append(
+                {
+                    "engine": engine_name,
+                    "reason": "non_positive_weight",
+                }
+            )
+
+            continue
+
+        if confidence <= 0.0:
+
+            rejected.append(
+                {
+                    "engine": engine_name,
+                    "reason": "zero_confidence",
+                }
+            )
+
+            continue
+
+        usable.append(
+            {
+                "engine": engine_name,
+                "score": score,
+                "weight": weight,
+                "confidence": confidence,
+            }
+        )
+
+    return usable, rejected
+
+
+# ---------------------------------------------------------------------------
+# RESULT
+# ---------------------------------------------------------------------------
+
 def _result(
     engine: str,
     score: float,
     confidence: float,
     reason: str,
     weight: float = 1.0,
-    **extra,
+    **extra: Any,
 ) -> dict[str, Any]:
 
     result = {
@@ -176,38 +400,45 @@ def _result(
     return result
 
 
+# ---------------------------------------------------------------------------
+# ENGINE
+# ---------------------------------------------------------------------------
+
 class SixtyMinuteEngine:
     """
-    Horizon-aware forward prediction engine.
+    Backward-compatible horizon-aware forward forecast engine.
 
-    Backward-compatible class name:
-        SixtyMinuteEngine
+    Runtime horizons:
 
-    Runtime behavior:
-        5  -> 5-minute forecast
-        15 -> 15-minute forecast
-        30 -> 30-minute forecast
-        60 -> 60-minute forecast
+        5 minutes
+        15 minutes
+        30 minutes
+        60 minutes
 
-    The actual horizon is ALWAYS taken from:
+    The class name remains SixtyMinuteEngine for compatibility
+    with the existing Apex registry and imports.
+
+    The actual horizon is always obtained from:
 
         context.horizon_minutes
 
-    This engine does not claim calibrated probability.
-    Confidence represents current evidence strength only.
+    This engine:
+        - consumes research evidence;
+        - performs confidence-weighted aggregation;
+        - calculates directional agreement;
+        - estimates historical/current volatility;
+        - produces a forward movement scenario.
 
-    No future candles are used.
+    It does NOT:
+        - use future candles;
+        - claim calibrated probability;
+        - guarantee future price movement;
+        - make the final BUY/SELL decision.
     """
 
     name = "SixtyMinuteEngine"
-    version = "2.3.0"
+    version = "2.4.0"
 
-    # IMPORTANT:
-    #
-    # Do NOT declare "60_MINUTE" here.
-    #
-    # This engine is now horizon-aware and must participate
-    # in all supported prediction contexts.
     capabilities = [
         "PREDICTION",
         "FORWARD_FORECAST",
@@ -221,80 +452,14 @@ class SixtyMinuteEngine:
     def self_test(self) -> bool:
         return True
 
-    # ================================================================
-    # EVIDENCE PREPARATION
-    # ================================================================
-
-    @staticmethod
-    def _prepare_evidence(
-        evidence: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-
-        usable: list[dict[str, Any]] = []
-
-        for item in evidence:
-
-            score = _clamp(
-                _safe_float(
-                    item.get(
-                        "score",
-                        0.0,
-                    )
-                )
-            )
-
-            weight = max(
-                0.0,
-                _safe_float(
-                    item.get(
-                        "weight",
-                        0.0,
-                    )
-                ),
-            )
-
-            confidence = max(
-                0.0,
-                min(
-                    1.0,
-                    _safe_float(
-                        item.get(
-                            "confidence",
-                            0.0,
-                        )
-                    ),
-                ),
-            )
-
-            if weight <= 0.0:
-                continue
-
-            if confidence <= 0.0:
-                continue
-
-            usable.append(
-                {
-                    "engine": item.get(
-                        "engine",
-                        "unknown",
-                    ),
-                    "score": score,
-                    "weight": weight,
-                    "confidence": confidence,
-                }
-            )
-
-        return usable
-
-    # ================================================================
-    # WEIGHTED EVIDENCE
-    # ================================================================
+    # ------------------------------------------------------------------
+    # AGGREGATION
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _aggregate(
         evidence: list[dict[str, Any]],
     ) -> tuple[
-        float,
         float,
         float,
         float,
@@ -329,15 +494,19 @@ class SixtyMinuteEngine:
             )
 
             if item["score"] > 0.05:
+
                 positive_weight += (
                     effective_weight
                 )
+
                 directional_count += 1
 
             elif item["score"] < -0.05:
+
                 negative_weight += (
                     effective_weight
                 )
+
                 directional_count += 1
 
         total_weight = sum(
@@ -345,12 +514,12 @@ class SixtyMinuteEngine:
         )
 
         if total_weight <= 0.0:
+
             return (
                 0.0,
                 0.0,
                 0.0,
-                0.0,
-                directional_count,
+                0,
             )
 
         score = _ratio(
@@ -374,19 +543,23 @@ class SixtyMinuteEngine:
             )
 
         else:
+
             agreement = 0.0
 
         return (
             _clamp(score),
-            _clamp(agreement, 0.0, 1.0),
+            _clamp(
+                agreement,
+                0.0,
+                1.0,
+            ),
             total_weight,
-            positive_weight,
             directional_count,
         )
 
-    # ================================================================
-    # HISTORICAL VOLATILITY
-    # ================================================================
+    # ------------------------------------------------------------------
+    # VOLATILITY
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _volatility(
@@ -405,16 +578,6 @@ class SixtyMinuteEngine:
         if len(close) < 6:
             return 0.0
 
-        # Use a horizon-dependent historical window.
-        #
-        # 5m  -> recent 5-minute behavior
-        # 15m -> recent 15-minute behavior
-        # 30m -> recent 30-minute behavior
-        # 60m -> recent 60-minute behavior
-        #
-        # The available dataset is still the canonical 1-minute
-        # candle series.
-
         window = min(
             len(close),
             max(
@@ -423,7 +586,9 @@ class SixtyMinuteEngine:
             ),
         )
 
-        recent_close = close[-window:]
+        recent_close = close[
+            -window:
+        ]
 
         returns: list[float] = []
 
@@ -435,26 +600,34 @@ class SixtyMinuteEngine:
             if previous == 0:
                 continue
 
-            returns.append(
-                (
-                    current - previous
+            value = (
+                current - previous
+            ) / abs(previous)
+
+            if math.isfinite(value):
+                returns.append(
+                    value
                 )
-                / abs(previous)
-            )
 
         if len(returns) < 2:
             return 0.0
 
-        return max(
-            0.0,
-            statistics.pstdev(
-                returns
-            ),
-        )
+        try:
 
-    # ================================================================
+            return max(
+                0.0,
+                statistics.pstdev(
+                    returns
+                ),
+            )
+
+        except statistics.StatisticsError:
+
+            return 0.0
+
+    # ------------------------------------------------------------------
     # DIRECTION
-    # ================================================================
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _direction(
@@ -469,50 +642,55 @@ class SixtyMinuteEngine:
 
         return "SIDEWAYS"
 
-    # ================================================================
-    # PREDICTION
-    # ================================================================
+    # ------------------------------------------------------------------
+    # PREDICT
+    # ------------------------------------------------------------------
 
     def predict(
         self,
         context,
     ) -> dict[str, Any]:
 
-        # ------------------------------------------------------------
-        # 0. Read horizon from context
-        # ------------------------------------------------------------
+        # --------------------------------------------------------------
+        # 1. HORIZON
+        # --------------------------------------------------------------
 
         horizon = _get_horizon(
             context
         )
 
-        # ------------------------------------------------------------
-        # 1. Read evidence
-        # ------------------------------------------------------------
+        # --------------------------------------------------------------
+        # 2. RESEARCH EVIDENCE
+        # --------------------------------------------------------------
 
-        evidence = _evidence(
+        raw_evidence = _evidence(
             context
         )
 
-        usable = self._prepare_evidence(
-            evidence
+        usable, rejected = (
+            _prepare_evidence(
+                raw_evidence
+            )
         )
 
-        # ------------------------------------------------------------
-        # 2. Evidence availability gate
-        # ------------------------------------------------------------
+        # --------------------------------------------------------------
+        # 3. MINIMUM EVIDENCE
+        # --------------------------------------------------------------
 
-        if len(usable) < self.MIN_EVIDENCE_COUNT:
+        if len(usable) < (
+            self.MIN_EVIDENCE_COUNT
+        ):
 
             return _result(
                 self.name,
                 0.0,
                 0.0,
                 (
-                    f"Insufficient independent evidence "
-                    f"for a {horizon}-minute forecast."
+                    f"Insufficient independent "
+                    f"evidence for a "
+                    f"{horizon}-minute forecast."
                 ),
-                1.25,
+                0.0,
 
                 direction="SIDEWAYS",
 
@@ -522,13 +700,27 @@ class SixtyMinuteEngine:
 
                 calibrated=False,
 
+                calibration_status=(
+                    "NOT_CALIBRATED"
+                ),
+
                 evidence_count=len(
+                    raw_evidence
+                ),
+
+                usable_evidence_count=len(
                     usable
+                ),
+
+                rejected_evidence_count=len(
+                    rejected
                 ),
 
                 directional_evidence_count=0,
 
                 evidence_strength=0.0,
+
+                agreement=0.0,
 
                 expected_return=0.0,
 
@@ -536,17 +728,19 @@ class SixtyMinuteEngine:
 
                 volatility=0.0,
 
+                contributing_engines=[],
+
+                rejected_engines=rejected,
             )
 
-        # ------------------------------------------------------------
-        # 3. Aggregate evidence
-        # ------------------------------------------------------------
+        # --------------------------------------------------------------
+        # 4. AGGREGATE
+        # --------------------------------------------------------------
 
         (
             score,
             agreement,
             total_weight,
-            _positive_weight,
             directional_evidence_count,
         ) = self._aggregate(
             usable
@@ -559,10 +753,11 @@ class SixtyMinuteEngine:
                 0.0,
                 0.0,
                 (
-                    f"No usable weighted evidence "
-                    f"for {horizon}-minute forecast."
+                    f"No usable weighted "
+                    f"evidence for "
+                    f"{horizon}-minute forecast."
                 ),
-                1.25,
+                0.0,
 
                 direction="SIDEWAYS",
 
@@ -572,13 +767,27 @@ class SixtyMinuteEngine:
 
                 calibrated=False,
 
+                calibration_status=(
+                    "NOT_CALIBRATED"
+                ),
+
                 evidence_count=len(
+                    raw_evidence
+                ),
+
+                usable_evidence_count=len(
                     usable
+                ),
+
+                rejected_evidence_count=len(
+                    rejected
                 ),
 
                 directional_evidence_count=0,
 
                 evidence_strength=0.0,
+
+                agreement=0.0,
 
                 expected_return=0.0,
 
@@ -586,19 +795,22 @@ class SixtyMinuteEngine:
 
                 volatility=0.0,
 
+                contributing_engines=[],
+
+                rejected_engines=rejected,
             )
 
-        # ------------------------------------------------------------
-        # 4. Direction
-        # ------------------------------------------------------------
+        # --------------------------------------------------------------
+        # 5. DIRECTION
+        # --------------------------------------------------------------
 
         direction = self._direction(
             score
         )
 
-        # ------------------------------------------------------------
-        # 5. Evidence strength
-        # ------------------------------------------------------------
+        # --------------------------------------------------------------
+        # 6. EVIDENCE STRENGTH
+        # --------------------------------------------------------------
 
         score_strength = min(
             1.0,
@@ -607,23 +819,25 @@ class SixtyMinuteEngine:
 
         evidence_strength = _clamp(
             (
-                score_strength * 0.65
-                + agreement * 0.35
+                score_strength
+                * 0.65
+                + agreement
+                * 0.35
             ),
             0.0,
             1.0,
         )
 
-        # ------------------------------------------------------------
-        # 6. Conservative confidence
+        # --------------------------------------------------------------
+        # 7. CONFIDENCE
         #
-        # IMPORTANT:
-        # This is evidence confidence, NOT probability.
-        # ------------------------------------------------------------
+        # This is NOT probability.
+        # --------------------------------------------------------------
 
         confidence = (
             0.10
-            + evidence_strength * 0.70
+            + evidence_strength
+            * 0.70
         )
 
         confidence = min(
@@ -632,34 +846,36 @@ class SixtyMinuteEngine:
         )
 
         if agreement < 0.55:
+
             confidence *= 0.75
 
-        # ------------------------------------------------------------
-        # 7. Historical/current volatility
-        # ------------------------------------------------------------
+        # --------------------------------------------------------------
+        # 8. DATA VOLATILITY
+        # --------------------------------------------------------------
 
-        volatility = self._volatility(
-            context,
-            horizon,
+        volatility = (
+            self._volatility(
+                context,
+                horizon,
+            )
         )
-
-        # ------------------------------------------------------------
-        # 8. Horizon-aware movement scenario
-        #
-        # This is a scenario estimate, not a guaranteed target.
-        #
-        # The sqrt(horizon) scaling reflects the use of a 1-minute
-        # return series as the underlying market-data basis.
-        # ------------------------------------------------------------
 
         base_volatility = max(
             volatility,
             0.0005,
         )
 
+        # --------------------------------------------------------------
+        # 9. HORIZON SCALING
+        # --------------------------------------------------------------
+
         horizon_scale = math.sqrt(
             horizon / 5.0
         )
+
+        # --------------------------------------------------------------
+        # 10. FORWARD MOVEMENT SCENARIO
+        # --------------------------------------------------------------
 
         expected_return = (
             score
@@ -674,9 +890,9 @@ class SixtyMinuteEngine:
             0.10,
         )
 
-        # ------------------------------------------------------------
-        # 9. Forecast availability
-        # ------------------------------------------------------------
+        # --------------------------------------------------------------
+        # 11. FORECAST VALIDITY
+        # --------------------------------------------------------------
 
         forecast_available = (
             len(usable)
@@ -691,22 +907,32 @@ class SixtyMinuteEngine:
             confidence = 0.0
             expected_return = 0.0
 
-        # ------------------------------------------------------------
-        # 10. Explanation
-        # ------------------------------------------------------------
+        # --------------------------------------------------------------
+        # 12. CONTRIBUTING ENGINES
+        # --------------------------------------------------------------
+
+        contributing_engines = [
+            item["engine"]
+            for item in usable
+        ]
+
+        # --------------------------------------------------------------
+        # 13. REASON
+        # --------------------------------------------------------------
 
         reason = (
             f"{horizon}-minute forward forecast: "
             f"score={score:.3f}, "
             f"agreement={agreement:.2f}, "
-            f"evidence_count={len(usable)}, "
+            f"usable_evidence="
+            f"{len(usable)}, "
             f"directional_evidence="
             f"{directional_evidence_count}"
         )
 
-        # ------------------------------------------------------------
-        # 11. Final result
-        # ------------------------------------------------------------
+        # --------------------------------------------------------------
+        # 14. FINAL RESULT
+        # --------------------------------------------------------------
 
         return _result(
             self.name,
@@ -723,12 +949,26 @@ class SixtyMinuteEngine:
 
             horizon_minutes=horizon,
 
-            forecast_available=forecast_available,
+            forecast_available=(
+                forecast_available
+            ),
 
             calibrated=False,
 
+            calibration_status=(
+                "NOT_CALIBRATED"
+            ),
+
             evidence_count=len(
+                raw_evidence
+            ),
+
+            usable_evidence_count=len(
                 usable
+            ),
+
+            rejected_evidence_count=len(
+                rejected
             ),
 
             directional_evidence_count=(
@@ -750,6 +990,11 @@ class SixtyMinuteEngine:
                 8,
             ),
 
+            horizon_scale=round(
+                horizon_scale,
+                6,
+            ),
+
             expected_return=round(
                 expected_return,
                 6,
@@ -759,6 +1004,12 @@ class SixtyMinuteEngine:
                 1.0 - confidence,
                 6,
             ),
+
+            contributing_engines=(
+                contributing_engines
+            ),
+
+            rejected_engines=rejected,
         )
 
     analyze = predict
