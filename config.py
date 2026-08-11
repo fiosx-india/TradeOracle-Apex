@@ -6,7 +6,7 @@ APP_NAME = "TradeOracle Apex"
 VERSION = "2.2.0"
 
 PREDICTION_HORIZON_MINUTES = int(
-    os.getenv("APEX_HORIZON_MINUTES", "60")
+    os.getenv("APEX_HORIZON_MINUTES", "05" "15" "30" "60")
 )
 
 # Live Angel One is the default. Set APEX_DATA_MODE=demo only for offline
