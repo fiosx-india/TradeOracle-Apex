@@ -18,7 +18,7 @@ def _series(context, *keys) -> list[float]:
         if not isinstance(value, (list, tuple)):
             continue
 
-        result = []
+        result: list[float] = []
 
         for item in value:
             try:
@@ -54,6 +54,13 @@ def _ratio(
         return default
 
     return numerator / denominator
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _evidence(context) -> list[dict[str, Any]]:
@@ -103,14 +110,14 @@ def _result(
                 0.0,
                 min(
                     1.0,
-                    float(confidence),
+                    _safe_float(confidence),
                 ),
             ),
             6,
         ),
         "weight": max(
             0.0,
-            float(weight),
+            _safe_float(weight),
         ),
         "reason": reason,
     }
@@ -122,22 +129,32 @@ def _result(
 
 class SixtyMinuteEngine:
     """
-    Forecast market direction over the next 60 minutes.
+    Forecast market direction for the next 60 minutes.
 
-    This is a forward-looking scenario forecast based on
-    currently available market evidence.
+    The engine produces a forward-looking scenario forecast
+    from currently available evidence.
 
-    It is NOT a statistically calibrated probability model
-    until historical walk-forward calibration is performed.
+    Important:
+    - This is NOT a calibrated probability.
+    - Confidence represents evidence strength only.
+    - Historical walk-forward validation is required before
+      treating the confidence value as statistically reliable.
+    - No future candles are used to generate the current forecast.
     """
 
     name = "SixtyMinuteEngine"
-    version = "2.1.0"
+    version = "2.2.0"
 
     capabilities = [
         "PREDICTION",
         "60_MINUTE",
+        "FORWARD_FORECAST",
     ]
+
+    HORIZON_MINUTES = 60
+
+    MIN_EVIDENCE_COUNT = 2
+    MIN_DIRECTIONAL_EVIDENCE = 1
 
     def self_test(self) -> bool:
         return True
@@ -145,12 +162,12 @@ class SixtyMinuteEngine:
     def predict(self, context) -> dict[str, Any]:
         evidence = _evidence(context)
 
-        usable = []
+        usable: list[dict[str, Any]] = []
 
         for item in evidence:
             try:
                 score = _clamp(
-                    float(
+                    _safe_float(
                         item.get(
                             "score",
                             0.0,
@@ -160,7 +177,7 @@ class SixtyMinuteEngine:
 
                 weight = max(
                     0.0,
-                    float(
+                    _safe_float(
                         item.get(
                             "weight",
                             0.0,
@@ -172,7 +189,7 @@ class SixtyMinuteEngine:
                     0.0,
                     min(
                         1.0,
-                        float(
+                        _safe_float(
                             item.get(
                                 "confidence",
                                 0.0,
@@ -181,44 +198,58 @@ class SixtyMinuteEngine:
                     ),
                 )
 
-            except (
-                TypeError,
-                ValueError,
-            ):
+            except (TypeError, ValueError):
                 continue
 
-            if weight <= 0 or confidence <= 0:
+            if weight <= 0.0:
+                continue
+
+            if confidence <= 0.0:
                 continue
 
             usable.append(
                 {
-                    "score": score,
-                    "weight": weight,
-                    "confidence": confidence,
                     "engine": item.get(
                         "engine",
                         "unknown",
                     ),
+                    "score": score,
+                    "weight": weight,
+                    "confidence": confidence,
                 }
             )
 
-        if not usable:
+        # ---------------------------------------------------------
+        # 1. Evidence availability gate
+        # ---------------------------------------------------------
+
+        if len(usable) < self.MIN_EVIDENCE_COUNT:
             return _result(
                 self.name,
                 0.0,
                 0.0,
-                "No usable evidence for 60-minute forward forecast.",
+                (
+                    "Insufficient independent evidence for "
+                    "a 60-minute forward forecast."
+                ),
                 1.25,
                 direction="SIDEWAYS",
-                horizon_minutes=60,
+                horizon_minutes=self.HORIZON_MINUTES,
                 forecast_available=False,
                 calibrated=False,
+                evidence_count=len(usable),
+                directional_evidence_count=0,
+                evidence_strength=0.0,
+                expected_return=0.0,
                 uncertainty=1.0,
             )
 
-        weighted_scores = []
+        # ---------------------------------------------------------
+        # 2. Weighted evidence aggregation
+        # ---------------------------------------------------------
 
-        total_weight = 0.0
+        weighted_scores: list[float] = []
+        effective_weights: list[float] = []
 
         for item in usable:
             effective_weight = (
@@ -226,24 +257,35 @@ class SixtyMinuteEngine:
                 * item["confidence"]
             )
 
+            if effective_weight <= 0.0:
+                continue
+
             weighted_scores.append(
                 item["score"]
                 * effective_weight
             )
 
-            total_weight += effective_weight
+            effective_weights.append(
+                effective_weight
+            )
 
-        if total_weight <= 0:
+        total_weight = sum(effective_weights)
+
+        if total_weight <= 0.0:
             return _result(
                 self.name,
                 0.0,
                 0.0,
-                "Evidence weights are unusable.",
+                "No usable weighted evidence for forecast.",
                 1.25,
                 direction="SIDEWAYS",
-                horizon_minutes=60,
+                horizon_minutes=self.HORIZON_MINUTES,
                 forecast_available=False,
                 calibrated=False,
+                evidence_count=len(usable),
+                directional_evidence_count=0,
+                evidence_strength=0.0,
+                expected_return=0.0,
                 uncertainty=1.0,
             )
 
@@ -252,24 +294,33 @@ class SixtyMinuteEngine:
             total_weight,
         )
 
-        positive_weight = sum(
-            item["weight"] * item["confidence"]
-            for item in usable
-            if item["score"] > 0.05
-        )
+        score = _clamp(score)
 
-        negative_weight = sum(
-            item["weight"] * item["confidence"]
-            for item in usable
-            if item["score"] < -0.05
-        )
+        # ---------------------------------------------------------
+        # 3. Directional agreement
+        # ---------------------------------------------------------
+
+        positive_weight = 0.0
+        negative_weight = 0.0
+
+        for item in usable:
+            effective_weight = (
+                item["weight"]
+                * item["confidence"]
+            )
+
+            if item["score"] > 0.05:
+                positive_weight += effective_weight
+
+            elif item["score"] < -0.05:
+                negative_weight += effective_weight
 
         directional_weight = (
             positive_weight
             + negative_weight
         )
 
-        if directional_weight > 0:
+        if directional_weight > 0.0:
             agreement = (
                 max(
                     positive_weight,
@@ -280,6 +331,16 @@ class SixtyMinuteEngine:
         else:
             agreement = 0.0
 
+        directional_evidence_count = sum(
+            1
+            for item in usable
+            if abs(item["score"]) > 0.05
+        )
+
+        # ---------------------------------------------------------
+        # 4. Direction decision
+        # ---------------------------------------------------------
+
         if score >= 0.12:
             direction = "UP"
 
@@ -289,12 +350,30 @@ class SixtyMinuteEngine:
         else:
             direction = "SIDEWAYS"
 
-        # This is evidence strength, NOT calibrated probability.
-        evidence_strength = min(
+        # ---------------------------------------------------------
+        # 5. Evidence strength
+        #
+        # This is NOT probability.
+        # ---------------------------------------------------------
+
+        score_strength = min(
             1.0,
-            abs(score) * 0.65
-            + agreement * 0.35,
+            abs(score),
         )
+
+        evidence_strength = _clamp(
+            score_strength * 0.65
+            + agreement * 0.35,
+            0.0,
+            1.0,
+        )
+
+        # ---------------------------------------------------------
+        # 6. Confidence
+        #
+        # Confidence is deliberately conservative.
+        # It must NOT be interpreted as calibrated probability.
+        # ---------------------------------------------------------
 
         confidence = (
             0.10
@@ -306,6 +385,19 @@ class SixtyMinuteEngine:
             confidence,
         )
 
+        # If there is almost no directional agreement,
+        # reduce confidence even when the aggregate score
+        # is slightly directional.
+        if agreement < 0.55:
+            confidence *= 0.75
+
+        # ---------------------------------------------------------
+        # 7. Market volatility context
+        #
+        # Use only historical/current candles already available
+        # in the context. No future information is used.
+        # ---------------------------------------------------------
+
         close = _series(
             context,
             "close",
@@ -316,12 +408,15 @@ class SixtyMinuteEngine:
 
         volatility = 0.0
 
-        if len(close) >= 6:
-            returns = []
+        if len(close) >= 10:
+            returns: list[float] = []
+
+            # Use recent completed observations only.
+            recent_close = close[-30:]
 
             for previous, current in zip(
-                close[-6:-1],
-                close[-5:],
+                recent_close[:-1],
+                recent_close[1:],
             ):
                 if previous == 0:
                     continue
@@ -331,18 +426,25 @@ class SixtyMinuteEngine:
                     / abs(previous)
                 )
 
-            if len(returns) > 1:
+            if len(returns) >= 5:
                 volatility = statistics.pstdev(
                     returns
                 )
 
-        # Scenario movement estimate only.
+        # ---------------------------------------------------------
+        # 8. Forward movement scenario
+        #
+        # This is an estimate, NOT a guaranteed target price.
+        # ---------------------------------------------------------
+
+        base_volatility = max(
+            volatility,
+            0.0005,
+        )
+
         expected_return = (
             score
-            * max(
-                volatility,
-                0.002,
-            )
+            * base_volatility
             * 2.0
         )
 
@@ -352,22 +454,47 @@ class SixtyMinuteEngine:
             0.10,
         )
 
+        # ---------------------------------------------------------
+        # 9. Forecast availability
+        # ---------------------------------------------------------
+
+        forecast_available = (
+            len(usable) >= self.MIN_EVIDENCE_COUNT
+            and directional_evidence_count
+            >= self.MIN_DIRECTIONAL_EVIDENCE
+        )
+
+        if not forecast_available:
+            direction = "SIDEWAYS"
+            confidence = 0.0
+            expected_return = 0.0
+
+        # ---------------------------------------------------------
+        # 10. Final explanation
+        # ---------------------------------------------------------
+
+        reason = (
+            "60-minute forward forecast: "
+            f"score={score:.3f}, "
+            f"agreement={agreement:.2f}, "
+            f"evidence_count={len(usable)}, "
+            f"directional_evidence={directional_evidence_count}"
+        )
+
         return _result(
             self.name,
             score,
             confidence,
-            (
-                "60-minute forward forecast: "
-                f"score={score:.3f}, "
-                f"agreement={agreement:.2f}, "
-                f"evidence_count={len(usable)}"
-            ),
+            reason,
             1.25,
             direction=direction,
-            horizon_minutes=60,
-            forecast_available=True,
+            horizon_minutes=self.HORIZON_MINUTES,
+            forecast_available=forecast_available,
             calibrated=False,
             evidence_count=len(usable),
+            directional_evidence_count=(
+                directional_evidence_count
+            ),
             agreement=round(
                 agreement,
                 6,
@@ -375,6 +502,10 @@ class SixtyMinuteEngine:
             evidence_strength=round(
                 evidence_strength,
                 6,
+            ),
+            volatility=round(
+                volatility,
+                8,
             ),
             expected_return=round(
                 expected_return,
