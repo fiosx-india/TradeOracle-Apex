@@ -202,170 +202,137 @@ class AngelOneProvider:
     # ------------------------------------------------------------------
 
     def _resolve_instrument(
-        self,
-        symbol: Optional[str],
-    ) -> tuple[str, str]:
+            self,
+            symbol: Optional[str],
+            exchange: Optional[str] = None,
+        ) -> tuple[str, str]:
 
-        requested = (
-            symbol or self.symbol
-        ).strip()
+            requested = (
+                symbol or self.symbol
+            ).strip()
 
-        if not requested:
-            raise RuntimeError(
-                "Angel One symbol is empty."
-            )
-
-        cache_key = (
-            f"{self.exchange}:"
-            f"{requested.upper()}"
-        )
-
-        if cache_key in (
-            self._resolved_instruments
-        ):
-            return (
-                self._resolved_instruments[
-                    cache_key
-                ]
-            )
-
-        configured_token = (
-            self.symbol_token
-            if requested.upper()
-            == self.symbol.upper()
-            else ""
-        )
-
-        if configured_token:
-            result = (
-                requested,
-                configured_token,
-            )
-
-            self._resolved_instruments[
-                cache_key
-            ] = result
-
-            return result
-
-        # Official standard Angel One token
-        # used for NIFTY 50.
-        if (
-            self.exchange == "NSE"
-            and requested.upper()
-            in {
-                "NIFTY",
-                "NIFTY 50",
-                "NIFTY50",
-            }
-        ):
-            result = (
-                "NIFTY",
-                "99926000",
-            )
-
-            self._resolved_instruments[
-                cache_key
-            ] = result
-
-            return result
-
-        response = self.client.searchScrip(
-            self.exchange,
-            requested,
-        )
-
-        if (
-            not isinstance(response, dict)
-            or not response.get("status")
-        ):
-            message = (
-                response.get(
-                    "message",
-                    "Angel One symbol lookup failed",
+            if not requested:
+                raise RuntimeError(
+                    "Angel One symbol is empty."
                 )
-                if isinstance(response, dict)
-                else "Angel One symbol lookup failed"
+
+            target_exchange = (
+                exchange
+                or self.exchange
+            ).strip().upper()
+
+            cache_key = (
+                f"{target_exchange}:"
+                f"{requested.upper()}"
             )
 
-            raise RuntimeError(message)
+            if cache_key in self._resolved_instruments:
+                return self._resolved_instruments[cache_key]
 
-        rows = (
-            response.get("data") or []
-        )
-
-        if not rows:
-            raise RuntimeError(
-                f"Angel One could not find "
-                f"symbol '{requested}' "
-                f"on {self.exchange}."
+            configured_token = (
+                self.symbol_token
+                if (
+                    target_exchange == self.exchange
+                    and requested.upper() == self.symbol.upper()
+                )
+                else ""
             )
 
-        candidates = [
-            row
-            for row in rows
+            if configured_token:
+                result = (
+                    requested,
+                    configured_token,
+                )
+
+                self._resolved_instruments[cache_key] = result
+                return result
+
+            # NIFTY standard token.
             if (
-                isinstance(row, dict)
-                and row.get("symboltoken")
-                and row.get("tradingsymbol")
-            )
-        ]
-
-        if not candidates:
-            raise RuntimeError(
-                f"Angel One returned no usable "
-                f"instrument for '{requested}'."
-            )
-
-        exact = [
-            row
-            for row in candidates
-            if str(
-                row.get(
-                    "tradingsymbol",
-                    "",
+                target_exchange == "NSE"
+                and requested.upper()
+                in {
+                    "NIFTY",
+                    "NIFTY 50",
+                    "NIFTY50",
+                }
+            ):
+                result = (
+                    "NIFTY",
+                    "99926000",
                 )
-            ).upper()
-            == requested.upper()
-        ]
 
-        equity = [
-            row
-            for row in candidates
-            if str(
-                row.get(
-                    "tradingsymbol",
-                    "",
+                self._resolved_instruments[cache_key] = result
+                return result
+
+            # MCX and all other instruments:
+            # resolve through Angel One Search Scrip.
+            response = self.client.searchScrip(
+                target_exchange,
+                requested,
+            )
+
+            if (
+                not isinstance(response, dict)
+                or not response.get("status")
+            ):
+                message = (
+                    response.get(
+                        "message",
+                        "Angel One symbol lookup failed",
+                    )
+                    if isinstance(response, dict)
+                    else "Angel One symbol lookup failed"
                 )
-            ).upper()
-            == f"{requested.upper()}-EQ"
-        ]
 
-        chosen = (
-            exact
-            or equity
-            or candidates
-        )[0]
+                raise RuntimeError(message)
 
-        trading_symbol = str(
-            chosen["tradingsymbol"]
-        )
+            rows = response.get("data") or []
 
-        token = str(
-            chosen["symboltoken"]
-        )
+            if not rows:
+                raise RuntimeError(
+                    f"Angel One could not find "
+                    f"symbol '{requested}' "
+                    f"on {target_exchange}."
+                )
 
-        result = (
-            trading_symbol,
-            token,
-        )
+            candidates = [
+                row
+                for row in rows
+                if (
+                    isinstance(row, dict)
+                    and row.get("symboltoken")
+                    and row.get("tradingsymbol")
+                )
+            ]
 
-        self._resolved_instruments[
-            cache_key
-        ] = result
+            if not candidates:
+                raise RuntimeError(
+                    f"Angel One returned no usable "
+                    f"instrument for '{requested}'."
+                )
 
-        return result
+            exact = [
+                row
+                for row in candidates
+                if str(
+                    row.get("tradingsymbol", "")
+                ).upper()
+                == requested.upper()
+            ]
 
+            chosen = (
+                exact or candidates
+            )[0]
+
+            result = (
+                str(chosen["tradingsymbol"]),
+                str(chosen["symboltoken"]),
+            )
+
+            self._resolved_instruments[cache_key] = result
+
+            return result
     # ------------------------------------------------------------------
     # LTP
     # ------------------------------------------------------------------
@@ -373,14 +340,22 @@ class AngelOneProvider:
     def _fetch_ltp(
         self,
         symbol: Optional[str] = None,
+        exchange: Optional[str] = None,
     ) -> list[dict[str, Any]]:
 
-        trading_symbol, token = (
-            self._resolve_instrument(symbol)
-        )
+        target_exchange = (
+            exchange or self.exchange
+        ).strip().upper()
 
+        trading_symbol, token = (
+            self._resolve_instrument(
+                symbol,
+                target_exchange,
+            )
+        )
+        
         response = self.client.ltpData(
-            self.exchange,
+            target_exchange,
             trading_symbol,
             token,
         )
@@ -782,10 +757,18 @@ class AngelOneProvider:
         start: Any = None,
         end: Any = None,
         limit: Optional[int] = None,
+        exchange: Optional[str] = None,
     ) -> list[dict[str, Any]]:
 
+        target_exchange = (
+            exchange or self.exchange
+        ).strip().upper()
+
         trading_symbol, token = (
-            self._resolve_instrument(symbol)
+            self._resolve_instrument(
+                symbol,
+                target_exchange,
+            )
         )
 
         start_dt, end_dt = (
@@ -797,7 +780,7 @@ class AngelOneProvider:
         )
 
         params = {
-            "exchange": self.exchange,
+            "exchange": target_exchange,
             "symboltoken": token,
             "interval": self.interval,
             "fromdate": start_dt.strftime(
