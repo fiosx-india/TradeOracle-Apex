@@ -170,6 +170,76 @@ def run_analysis(
         horizons_minutes=HORIZONS,
     )
 
+    # ---------------------------------------------------------------
+    # 3. COMMODITY MARKET — MCX
+    # ---------------------------------------------------------------
+    st.header("3. MCX Commodity Market")
+
+    commodity_symbols = {
+        "Gold": "GOLD",
+        "Silver": "SILVER",
+        "Copper": "COPPER",
+        "Crude Oil": "CRUDEOIL",
+    }
+
+    selected_commodity = st.selectbox(
+        "Select MCX Commodity",
+        list(commodity_symbols.keys()),
+        key="mcx_commodity",
+    )
+
+    commodity_symbol = commodity_symbols[
+        selected_commodity
+    ]
+
+    try:
+        commodity_ltp = provider.latest(
+            symbol=commodity_symbol,
+            exchange="MCX",
+        )
+
+        record = commodity_ltp.get("record")
+
+        if record:
+            commodity_data = {
+                "commodities": [
+                    {
+                        "symbol": record.get(
+                            "symbol",
+                            commodity_symbol,
+                        ),
+                        "price": record.get("price"),
+                        "change_pct": record.get(
+                            "change_pct"
+                        ),
+                        "timestamp": record.get(
+                            "timestamp"
+                        ),
+                    }
+                ]
+            }
+
+            commodity_view = CommodityView()
+
+            rendered = commodity_view.render(
+                commodity_data
+            )
+
+            st.json(rendered)
+
+        else:
+            st.info(
+                f"No live MCX data available for "
+                f"{selected_commodity}."
+            )
+
+    except Exception as exc:
+        st.warning(
+            f"MCX data unavailable for "
+            f"{selected_commodity}: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # SAFE HELPERS
