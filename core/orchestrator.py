@@ -3,17 +3,23 @@
 Responsibilities
 ----------------
 1. Discover first-party and incoming engines.
-2. Validate and benchmark engines before registration.
+2. Validate and contract-test engines before registration.
 3. Acquire canonical market data through MarketData.
-4. Build one shared base market context.
-5. Optionally enrich the base context with secondary data.
-6. Create independent horizon contexts for:
-       5, 15, 30 and 60 minutes.
+4. Build one shared, horizon-neutral base MarketContext.
+5. Optionally enrich the base context once with secondary data.
+6. Create independent contexts for the configured prediction horizons.
 7. Evaluate each horizon independently through ApexMasterBrain.
 8. Return per-horizon results without fabricating market data.
 
-This file is orchestration only.
-It contains no trading/order/GTT logic.
+Architecture rules
+------------------
+- Prediction horizons are 5, 15, 30 and 60 minutes.
+- One MarketContext represents one prediction horizon during evaluation.
+- Angel One candle interval is independent of prediction horizons.
+- Market data is fetched once for a multi-horizon run.
+- No synthetic/current timestamp is created when market data is empty.
+- Signal gating remains owned by DecisionEngine -> SignalGate.
+- This file contains no order-placement or GTT logic.
 """
 
 from __future__ import annotations
@@ -23,20 +29,17 @@ import importlib
 import inspect
 import pkgutil
 
-from typing import (
-    Any,
-    Callable,
-    Optional,
-)
-
-from config import (
-    INCOMING_DIR,
-    LIVE_DATA_MAX_AGE_SECONDS,
-)
+from typing import Any, Callable, Iterable, Optional
 
 try:
-    from config import PREDICTION_HORIZONS_MINUTES
+    from config import (
+        INCOMING_DIR,
+        LIVE_DATA_MAX_AGE_SECONDS,
+        PREDICTION_HORIZONS_MINUTES,
+    )
 except ImportError:
+    INCOMING_DIR = "incoming"
+    LIVE_DATA_MAX_AGE_SECONDS = 120
     PREDICTION_HORIZONS_MINUTES = (
         5,
         15,
@@ -67,7 +70,11 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# SUPPORTED HORIZONS
+# CANONICAL HORIZONS
+# ---------------------------------------------------------------------------
+#
+# config.py is authoritative for runtime configuration, but this orchestrator
+# deliberately protects the architecture from accidental horizon expansion.
 # ---------------------------------------------------------------------------
 
 SUPPORTED_HORIZONS = (
@@ -76,6 +83,27 @@ SUPPORTED_HORIZONS = (
     30,
     60,
 )
+
+try:
+    _configured_horizons = tuple(
+        sorted(
+            {
+                int(value)
+                for value in PREDICTION_HORIZONS_MINUTES
+            }
+        )
+    )
+except (
+    TypeError,
+    ValueError,
+):
+    _configured_horizons = SUPPORTED_HORIZONS
+
+if _configured_horizons != SUPPORTED_HORIZONS:
+    raise ValueError(
+        "TradeOracle Apex requires exactly these prediction horizons: "
+        "5, 15, 30 and 60 minutes."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -95,20 +123,16 @@ BUILTIN_PACKAGES = (
 # ---------------------------------------------------------------------------
 
 class _FailedEngine:
-    """Represents an engine that failed during construction."""
+    """Represent an engine that failed during construction."""
 
     def __init__(
         self,
         name: str,
         error: Exception,
     ) -> None:
-
         self.name = name
         self.error = error
-
-        self.capabilities = [
-            "FAILED",
-        ]
+        self.capabilities = ["FAILED"]
 
     def self_test(self) -> bool:
         return False
@@ -117,7 +141,6 @@ class _FailedEngine:
         self,
         context: Any,
     ) -> dict[str, Any]:
-
         raise RuntimeError(
             "Engine initialization failed: "
             f"{type(self.error).__name__}: "
@@ -132,19 +155,17 @@ class _FailedEngine:
 class ApexOrchestrator:
     """Single orchestration layer for the complete Apex runtime."""
 
+    name = "ApexOrchestrator"
+    version = "2.4.0"
+
     def __init__(
         self,
         incoming: str = INCOMING_DIR,
         market_data: Optional[MarketData] = None,
-        market_provider: Optional[
-            Callable[..., Any]
-        ] = None,
-        max_age_seconds: int = (
-            LIVE_DATA_MAX_AGE_SECONDS
-        ),
+        market_provider: Optional[Callable[..., Any]] = None,
+        max_age_seconds: int = LIVE_DATA_MAX_AGE_SECONDS,
         context_enricher: Optional[Any] = None,
     ) -> None:
-
         self.incoming = incoming
 
         self.registry = SystemRegistry()
@@ -154,7 +175,6 @@ class ApexOrchestrator:
         )
 
         self.validator = PluginValidator()
-
         self.benchmark = PluginBenchmark()
 
         self.market_data = (
@@ -171,30 +191,19 @@ class ApexOrchestrator:
             router=self.router,
         )
 
-        # --------------------------------------------------------------
-        # OPTIONAL SECONDARY CONTEXT
-        # --------------------------------------------------------------
-
+        # Optional secondary context layer.
         if context_enricher is not None:
-
-            self.context_enricher = (
-                context_enricher
-            )
+            self.context_enricher = context_enricher
 
         elif MarketContextEnricher is not None:
-
             try:
-
                 self.context_enricher = (
                     MarketContextEnricher()
                 )
-
             except Exception:
-
                 self.context_enricher = None
 
         else:
-
             self.context_enricher = None
 
     # ==================================================================
@@ -212,12 +221,10 @@ class ApexOrchestrator:
         Priority:
             1. horizons_minutes
             2. horizon_minutes
-            3. configured PREDICTION_HORIZONS_MINUTES
+            3. config.PREDICTION_HORIZONS_MINUTES
 
-        Backward compatibility:
-            horizon_minutes=60
-
-        Multi-horizon:
+        Examples:
+            horizon_minutes=15
             horizons_minutes=(5, 15, 30, 60)
         """
 
@@ -225,36 +232,46 @@ class ApexOrchestrator:
 
             if isinstance(
                 horizons_minutes,
+                bool,
+            ):
+                raise ValueError(
+                    "horizons_minutes must be an integer "
+                    "or iterable of integers."
+                )
+
+            if isinstance(
+                horizons_minutes,
                 int,
             ):
-
                 values = [
                     horizons_minutes
                 ]
-
             else:
-
                 try:
-
                     values = list(
                         horizons_minutes
                     )
-
                 except TypeError as exc:
-
                     raise ValueError(
-                        "horizons_minutes must be "
-                        "an integer or iterable of integers."
+                        "horizons_minutes must be an integer "
+                        "or iterable of integers."
                     ) from exc
 
         elif horizon_minutes is not None:
+
+            if isinstance(
+                horizon_minutes,
+                bool,
+            ):
+                raise ValueError(
+                    "horizon_minutes must be an integer."
+                )
 
             values = [
                 horizon_minutes
             ]
 
         else:
-
             values = list(
                 PREDICTION_HORIZONS_MINUTES
             )
@@ -263,42 +280,41 @@ class ApexOrchestrator:
 
         for value in values:
 
-            try:
+            if isinstance(
+                value,
+                bool,
+            ):
+                raise ValueError(
+                    "Prediction horizon must be an integer."
+                )
 
+            try:
                 horizon = int(
                     value
                 )
-
             except (
                 TypeError,
                 ValueError,
             ) as exc:
-
                 raise ValueError(
-                    "Prediction horizon must be "
-                    "an integer."
+                    "Prediction horizon must be an integer."
                 ) from exc
 
             if horizon not in SUPPORTED_HORIZONS:
-
                 raise ValueError(
                     "Unsupported prediction horizon: "
-                    f"{horizon}. "
-                    f"Supported horizons: "
+                    f"{horizon}. Supported horizons: "
                     f"{SUPPORTED_HORIZONS}"
                 )
 
             if horizon not in normalized:
-
                 normalized.append(
                     horizon
                 )
 
         if not normalized:
-
             raise ValueError(
-                "At least one prediction horizon "
-                "is required."
+                "At least one prediction horizon is required."
             )
 
         return tuple(
@@ -315,16 +331,10 @@ class ApexOrchestrator:
     def _looks_like_engine(
         obj: Any,
     ) -> bool:
-
-        if not inspect.isclass(
-            obj
-        ):
+        if not inspect.isclass(obj):
             return False
 
-        if (
-            obj.__module__
-            == "builtins"
-        ):
+        if obj.__module__ == "builtins":
             return False
 
         name = getattr(
@@ -351,6 +361,7 @@ class ApexOrchestrator:
                     list,
                     tuple,
                     set,
+                    frozenset,
                 ),
             )
             and capabilities
@@ -358,9 +369,8 @@ class ApexOrchestrator:
 
     def _discover_builtin_engines(
         self,
-    ) -> list[
-        tuple[Any, str]
-    ]:
+    ) -> list[tuple[Any, str]]:
+        """Discover first-party engine classes without hard-coding filenames."""
 
         discovered: list[
             tuple[Any, str]
@@ -368,20 +378,13 @@ class ApexOrchestrator:
 
         seen: set[str] = set()
 
-        for package_name in (
-            BUILTIN_PACKAGES
-        ):
+        for package_name in BUILTIN_PACKAGES:
 
             try:
-
-                package = (
-                    importlib.import_module(
-                        package_name
-                    )
+                package = importlib.import_module(
+                    package_name
                 )
-
             except Exception:
-
                 continue
 
             package_path = getattr(
@@ -398,7 +401,6 @@ class ApexOrchestrator:
             ]
 
             try:
-
                 package_modules = (
                     pkgutil.walk_packages(
                         package_path,
@@ -408,32 +410,23 @@ class ApexOrchestrator:
                     )
                 )
 
-                for module_info in (
-                    package_modules
-                ):
+                for module_info in package_modules:
 
                     if not module_info.ispkg:
-
                         module_names.append(
                             module_info.name
                         )
 
             except Exception:
-
                 pass
 
             for module_name in module_names:
 
                 try:
-
-                    module = (
-                        importlib.import_module(
-                            module_name
-                        )
+                    module = importlib.import_module(
+                        module_name
                     )
-
                 except Exception:
-
                     continue
 
                 for _, obj in inspect.getmembers(
@@ -441,6 +434,7 @@ class ApexOrchestrator:
                     inspect.isclass,
                 ):
 
+                    # Only classes actually defined in the module.
                     if (
                         obj.__module__
                         != module.__name__
@@ -465,7 +459,6 @@ class ApexOrchestrator:
                     )
 
                     try:
-
                         engine = obj()
 
                         discovered.append(
@@ -497,6 +490,33 @@ class ApexOrchestrator:
     # VALIDATE / BENCHMARK / REGISTER
     # ==================================================================
 
+    @staticmethod
+    def _benchmark_passed(
+        benchmark: Any,
+    ) -> bool:
+        """
+        Normalize benchmark implementations.
+
+        Current production contract returns:
+            {"passed": bool, ...}
+
+        Older benchmark implementations may return only status/pending data.
+        They are not treated as passed unless they explicitly say so.
+        """
+
+        if not isinstance(
+            benchmark,
+            dict,
+        ):
+            return False
+
+        return bool(
+            benchmark.get(
+                "passed",
+                False,
+            )
+        )
+
     def _register_engine(
         self,
         engine: Any,
@@ -514,7 +534,6 @@ class ApexOrchestrator:
         # --------------------------------------------------------------
 
         try:
-
             validation = (
                 self.validator.validate(
                     engine
@@ -522,7 +541,6 @@ class ApexOrchestrator:
             )
 
         except Exception as exc:
-
             return {
                 "stage": "VALIDATION",
                 "status": "ERROR",
@@ -533,11 +551,24 @@ class ApexOrchestrator:
                 ],
             }
 
+        if not isinstance(
+            validation,
+            dict,
+        ):
+            return {
+                "stage": "VALIDATION",
+                "status": "ERROR",
+                "name": name,
+                "file": source_file,
+                "errors": [
+                    "PluginValidator returned a non-dict result."
+                ],
+            }
+
         if not validation.get(
             "valid",
             False,
         ):
-
             return {
                 "stage": "VALIDATION",
                 "status": "REJECTED",
@@ -547,6 +578,10 @@ class ApexOrchestrator:
                     "errors",
                     [],
                 ),
+                "warnings": validation.get(
+                    "warnings",
+                    [],
+                ),
             }
 
         # --------------------------------------------------------------
@@ -554,7 +589,6 @@ class ApexOrchestrator:
         # --------------------------------------------------------------
 
         try:
-
             benchmark = (
                 self.benchmark.benchmark(
                     engine
@@ -562,7 +596,6 @@ class ApexOrchestrator:
             )
 
         except Exception as exc:
-
             return {
                 "stage": "BENCHMARK",
                 "status": "ERROR",
@@ -573,20 +606,26 @@ class ApexOrchestrator:
                 ],
             }
 
-        if not benchmark.get(
-            "passed",
-            False,
+        if not self._benchmark_passed(
+            benchmark
         ):
+            errors = []
+
+            if isinstance(
+                benchmark,
+                dict,
+            ):
+                errors = benchmark.get(
+                    "errors",
+                    [],
+                )
 
             return {
                 "stage": "BENCHMARK",
                 "status": "REJECTED",
                 "name": name,
                 "file": source_file,
-                "errors": benchmark.get(
-                    "errors",
-                    [],
-                ),
+                "errors": errors,
                 "benchmark": benchmark,
             }
 
@@ -595,15 +634,32 @@ class ApexOrchestrator:
         # --------------------------------------------------------------
 
         try:
-
             self.registry.register(
                 engine,
                 benchmark=benchmark,
                 source_file=source_file,
             )
 
-        except Exception as exc:
+        except TypeError:
+            # Backward-compatible fallback for an older registry that
+            # still exposes register(engine) only.
+            try:
+                self.registry.register(
+                    engine
+                )
+            except Exception as exc:
+                return {
+                    "stage": "REGISTRATION",
+                    "status": "ERROR",
+                    "name": name,
+                    "file": source_file,
+                    "errors": [
+                        f"{type(exc).__name__}: {exc}"
+                    ],
+                    "benchmark": benchmark,
+                }
 
+        except Exception as exc:
             return {
                 "stage": "REGISTRATION",
                 "status": "ERROR",
@@ -656,11 +712,8 @@ class ApexOrchestrator:
         )
 
         try:
-
             items = loader.discover()
-
         except Exception as exc:
-
             items = [
                 {
                     "loaded": False,
@@ -676,15 +729,29 @@ class ApexOrchestrator:
 
         for item in items:
 
+            if not isinstance(
+                item,
+                dict,
+            ):
+                report.append(
+                    {
+                        "stage": "LOADER",
+                        "status": "ERROR",
+                        "file": self.incoming,
+                        "errors": [
+                            "Plugin loader returned a non-dict item."
+                        ],
+                    }
+                )
+                continue
+
             if not item.get(
                 "loaded",
                 False,
             ):
-
                 report.append(
                     item
                 )
-
                 continue
 
             engine = item.get(
@@ -692,7 +759,6 @@ class ApexOrchestrator:
             )
 
             if engine is None:
-
                 report.append(
                     {
                         "stage": "LOADER",
@@ -702,12 +768,13 @@ class ApexOrchestrator:
                             self.incoming,
                         ),
                         "errors": [
-                            "Plugin loader returned "
-                            "loaded=True without an engine."
+                            (
+                                "Plugin loader returned "
+                                "loaded=True without an engine."
+                            )
                         ],
                     }
                 )
-
                 continue
 
             report.append(
@@ -733,10 +800,16 @@ class ApexOrchestrator:
 
     @staticmethod
     def _records_to_data(
-        records: list[
+        records: Iterable[
             dict[str, Any]
         ],
     ) -> dict[str, Any]:
+        """
+        Convert canonical MarketData records into the series-oriented
+        structure expected by existing engines.
+
+        Unknown provider fields are not fabricated.
+        """
 
         if not records:
             return {}
@@ -792,9 +865,7 @@ class ApexOrchestrator:
             ),
         }
 
-        for target, names in (
-            aliases.items()
-        ):
+        for target, names in aliases.items():
 
             values: list[
                 float
@@ -804,28 +875,21 @@ class ApexOrchestrator:
 
                 value = next(
                     (
-                        row.get(
-                            name
-                        )
+                        row.get(name)
                         for name in names
-                        if row.get(
-                            name
-                        ) is not None
+                        if row.get(name) is not None
                     ),
                     None,
                 )
 
                 try:
-
                     number = float(
                         value
                     )
-
                 except (
                     TypeError,
                     ValueError,
                 ):
-
                     continue
 
                 if number != number:
@@ -836,7 +900,6 @@ class ApexOrchestrator:
                 )
 
             if values:
-
                 data[target] = values
 
         timestamps = [
@@ -850,10 +913,7 @@ class ApexOrchestrator:
         ]
 
         if timestamps:
-
-            data[
-                "timestamps"
-            ] = timestamps
+            data["timestamps"] = timestamps
 
         latest = ordered[-1]
 
@@ -869,12 +929,8 @@ class ApexOrchestrator:
             "data_type",
             "ingested_at",
         ):
-
             if key in latest:
-
-                data[key] = (
-                    latest[key]
-                )
+                data[key] = latest[key]
 
         return data
 
@@ -890,14 +946,16 @@ class ApexOrchestrator:
         start: Any = None,
         end: Any = None,
         limit: int = 120,
-        horizon_minutes: int = 60,
+        horizon_minutes: int = 5,
         **market_kwargs: Any,
     ) -> MarketContext:
         """
-        Fetch canonical market data once and build the
-        shared base MarketContext.
+        Fetch canonical market data once and build the shared,
+        horizon-neutral base MarketContext.
 
-        The base context is horizon-neutral.
+        The horizon argument is retained for backward compatibility.
+        Multi-horizon runtime evaluation replaces it with independent
+        cloned contexts before ApexMasterBrain.evaluate().
         """
 
         fetched = self.market_data.fetch(
@@ -912,7 +970,6 @@ class ApexOrchestrator:
             fetched,
             dict,
         ):
-
             fetched = {
                 "records": (
                     fetched
@@ -944,17 +1001,15 @@ class ApexOrchestrator:
             quality,
             dict,
         ):
-
             quality = {}
 
         data = self._records_to_data(
             records
         )
 
-        # --------------------------------------------------------------
-        # MARKET-DATA QUALITY
-        # --------------------------------------------------------------
-
+        # Keep quality in both locations:
+        # - data: backward compatibility for existing engines
+        # - context attribute: canonical MasterBrain -> SignalGate contract
         data[
             "market_data_quality"
         ] = copy.deepcopy(
@@ -968,13 +1023,7 @@ class ApexOrchestrator:
         )
 
         # --------------------------------------------------------------
-        # IMPORTANT:
-        #
-        # Never fabricate a market timestamp when no market
-        # record exists.
-        #
-        # The previous implementation used datetime.now()
-        # here. That can make EMPTY data look like current data.
+        # NO SYNTHETIC MARKET TIMESTAMP
         # --------------------------------------------------------------
 
         latest_timestamp = None
@@ -987,16 +1036,12 @@ class ApexOrchestrator:
                 latest,
                 dict,
             ):
-
-                latest_timestamp = (
-                    latest.get(
-                        "timestamp"
-                    )
+                latest_timestamp = latest.get(
+                    "timestamp"
                 )
 
-        # MarketContext currently requires a string timestamp.
-        # Use an explicit empty value rather than a fabricated
-        # current market timestamp.
+        # MarketContext requires a string. An empty value is explicit:
+        # no market record exists, therefore no market timestamp exists.
         context_timestamp = (
             str(
                 latest_timestamp
@@ -1016,10 +1061,6 @@ class ApexOrchestrator:
             evidence=[],
         )
 
-        # --------------------------------------------------------------
-        # SHARED MARKET-DATA CONTRACT
-        # --------------------------------------------------------------
-
         context.market_data_quality = (
             copy.deepcopy(
                 quality
@@ -1033,24 +1074,18 @@ class ApexOrchestrator:
         )
 
         # --------------------------------------------------------------
-        # SECONDARY CONTEXT
-        #
-        # Enrichment happens ONCE against the base context.
+        # OPTIONAL SECONDARY ENRICHMENT
         # --------------------------------------------------------------
 
         if (
             self.context_enricher is not None
             and records
         ):
-
             try:
-
                 self.context_enricher.enrich(
                     context
                 )
-
             except Exception as exc:
-
                 data[
                     "context_enrichment_error"
                 ] = (
@@ -1070,37 +1105,52 @@ class ApexOrchestrator:
         horizon: int,
     ) -> MarketContext:
         """
-        Create an independent context for one prediction horizon.
+        Create a completely independent context for one horizon.
 
-        Each horizon receives:
-            - same canonical market snapshot
-            - independent data structure
-            - independent evidence
-            - independent horizon value
+        Shared:
+            canonical market snapshot
+
+        Independent:
+            data structure
+            evidence
+            horizon
+            staged MasterBrain outputs
         """
 
         context = MarketContext(
             timestamp=(
-                base_context.timestamp
+                getattr(
+                    base_context,
+                    "timestamp",
+                    "",
+                )
             ),
             symbol=(
-                base_context.symbol
+                getattr(
+                    base_context,
+                    "symbol",
+                    "",
+                )
             ),
             sector=(
-                base_context.sector
+                getattr(
+                    base_context,
+                    "sector",
+                    "",
+                )
             ),
             horizon_minutes=int(
                 horizon
             ),
             data=copy.deepcopy(
-                base_context.data
+                getattr(
+                    base_context,
+                    "data",
+                    {},
+                )
             ),
             evidence=[],
         )
-
-        # Dynamic attributes are preserved because MarketContext
-        # is intentionally lightweight and the existing Master Brain
-        # reads these attributes directly.
 
         context.market_data_quality = (
             copy.deepcopy(
@@ -1141,23 +1191,33 @@ class ApexOrchestrator:
             context_data,
             dict,
         ):
-
             context_data = {}
 
-        quality = context_data.get(
+        quality = getattr(
+            context,
             "market_data_quality",
-            {},
+            None,
         )
 
         if not isinstance(
             quality,
             dict,
         ):
+            quality = context_data.get(
+                "market_data_quality",
+                {},
+            )
 
+        if not isinstance(
+            quality,
+            dict,
+        ):
             quality = {}
 
         return {
-            "quality": quality,
+            "quality": copy.deepcopy(
+                quality
+            ),
 
             "symbol": getattr(
                 context,
@@ -1168,7 +1228,7 @@ class ApexOrchestrator:
             "timestamp": getattr(
                 context,
                 "timestamp",
-                None,
+                "",
             ),
 
             "records": quality.get(
@@ -1188,8 +1248,15 @@ class ApexOrchestrator:
                 "UNKNOWN",
             ),
 
-            "source": context_data.get(
-                "market_data_source"
+            "source": (
+                getattr(
+                    context,
+                    "market_data_source",
+                    None,
+                )
+                or context_data.get(
+                    "market_data_source"
+                )
             ),
         }
 
@@ -1216,36 +1283,28 @@ class ApexOrchestrator:
         Run Apex.
 
         Single horizon:
-
             run(
                 symbol="NIFTY",
-                horizon_minutes=60,
+                horizon_minutes=15,
             )
 
         Multi-horizon:
-
             run(
                 symbol="NIFTY",
                 horizons_minutes=(5, 15, 30, 60),
             )
 
         Market data is fetched once.
-        Each horizon receives an independent context.
+        Each horizon gets an independent MarketContext.
         """
 
         # --------------------------------------------------------------
         # 1. RESOLVE HORIZONS
         # --------------------------------------------------------------
 
-        horizons = (
-            self._normalize_horizons(
-                horizon_minutes=(
-                    horizon_minutes
-                ),
-                horizons_minutes=(
-                    horizons_minutes
-                ),
-            )
+        horizons = self._normalize_horizons(
+            horizon_minutes=horizon_minutes,
+            horizons_minutes=horizons_minutes,
         )
 
         # --------------------------------------------------------------
@@ -1256,28 +1315,18 @@ class ApexOrchestrator:
             self.discover_validate_benchmark_register()
         )
 
-        # --------------------------------------------------------------
-        # REGISTRY SNAPSHOT
-        # --------------------------------------------------------------
-
         try:
-
             registered_engines = list(
                 self.registry.all()
             )
-
         except Exception:
-
             registered_engines = []
 
         try:
-
             registry_report = (
                 self.registry.report()
             )
-
         except Exception as exc:
-
             registry_report = {
                 "status": "ERROR",
                 "error": (
@@ -1290,7 +1339,6 @@ class ApexOrchestrator:
             str,
             Any,
         ] = {
-
             "status": "READY",
 
             "pipeline": [
@@ -1355,19 +1403,18 @@ class ApexOrchestrator:
                     start=start,
                     end=end,
                     limit=limit,
-                    horizon_minutes=(
-                        horizons[0]
-                    ),
+                    # Compatibility only. This value is replaced during
+                    # per-horizon cloning below.
+                    horizon_minutes=horizons[0],
                     **market_kwargs,
                 )
             )
 
         else:
-
             base_context = context
 
         # --------------------------------------------------------------
-        # 4. EVALUATE EACH HORIZON
+        # 4. EVALUATE EACH HORIZON INDEPENDENTLY
         # --------------------------------------------------------------
 
         horizon_results: dict[
@@ -1392,12 +1439,6 @@ class ApexOrchestrator:
                     )
                 )
 
-                horizon_market = (
-                    self._market_result(
-                        horizon_context
-                    )
-                )
-
                 horizon_results[
                     str(horizon)
                 ] = {
@@ -1410,12 +1451,12 @@ class ApexOrchestrator:
                     ),
 
                     "market_data": (
-                        horizon_market
+                        self._market_result(
+                            horizon_context
+                        )
                     ),
 
-                    "status": (
-                        "EVALUATED"
-                    ),
+                    "status": "EVALUATED",
                 }
 
             except Exception as exc:
@@ -1447,9 +1488,7 @@ class ApexOrchestrator:
         # 6. BACKWARD COMPATIBILITY
         # --------------------------------------------------------------
 
-        primary_horizon = (
-            horizons[0]
-        )
+        primary_horizon = horizons[0]
 
         primary_result = (
             horizon_results.get(
@@ -1510,7 +1549,6 @@ class ApexOrchestrator:
                 decision,
                 dict,
             ):
-
                 decision = {}
 
             summary[horizon] = {
@@ -1553,8 +1591,6 @@ class ApexOrchestrator:
 
         # --------------------------------------------------------------
         # 8. OVERALL STATUS
-        #
-        # Do not report READY/EVALUATED if every horizon failed.
         # --------------------------------------------------------------
 
         evaluated_count = sum(
@@ -1566,23 +1602,69 @@ class ApexOrchestrator:
         )
 
         if evaluated_count == 0:
-
-            result[
-                "status"
-            ] = "ERROR"
+            result["status"] = "ERROR"
 
         elif evaluated_count < len(
             horizon_results
         ):
-
-            result[
-                "status"
-            ] = "PARTIAL"
+            result["status"] = "PARTIAL"
 
         else:
-
-            result[
-                "status"
-            ] = "EVALUATED"
+            result["status"] = "EVALUATED"
 
         return result
+
+    # ==================================================================
+    # HEALTH
+    # ==================================================================
+
+    def health(self) -> dict[str, Any]:
+        """Report orchestration readiness without claiming broker health."""
+
+        provider_health = None
+
+        health_fn = getattr(
+            self.market_data,
+            "health",
+            None,
+        )
+
+        if callable(
+            health_fn
+        ):
+            try:
+                provider_health = health_fn()
+            except Exception as exc:
+                provider_health = {
+                    "status": "ERROR",
+                    "error": (
+                        f"{type(exc).__name__}: "
+                        f"{exc}"
+                    ),
+                }
+
+        return {
+            "engine": self.name,
+            "version": self.version,
+            "supported_horizons": list(
+                SUPPORTED_HORIZONS
+            ),
+            "incoming": self.incoming,
+            "registry_configured": (
+                self.registry is not None
+            ),
+            "market_data_configured": (
+                self.market_data is not None
+            ),
+            "provider_connected": (
+                self.market_data.provider
+                is not None
+            ),
+            "provider_health": provider_health,
+            "status": (
+                "READY"
+                if self.registry is not None
+                and self.market_data is not None
+                else "NOT_READY"
+            ),
+        }
