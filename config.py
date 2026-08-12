@@ -1,4 +1,16 @@
-"""Central, environment-driven Apex configuration."""
+"""Central, environment-driven Apex configuration.
+
+TradeOracle Apex configuration contract.
+
+Important:
+- Prediction horizons are independent of Angel One candle intervals.
+- Apex supports exactly 5, 15, 30 and 60 minute prediction horizons.
+- Angel One market data remains on ONE_MINUTE candles.
+- Live mode is the production default.
+- This module contains configuration only; it does not create market data.
+"""
+
+from __future__ import annotations
 
 import os
 
@@ -8,11 +20,106 @@ VERSION = "2.2.0"
 
 
 # ---------------------------------------------------------------------------
+# SMALL CONFIGURATION HELPERS
+# ---------------------------------------------------------------------------
+
+def _env_str(
+    name: str,
+    default: str,
+) -> str:
+    return os.getenv(
+        name,
+        default,
+    ).strip()
+
+
+def _env_int(
+    name: str,
+    default: int,
+    *,
+    minimum: int | None = None,
+) -> int:
+    raw = os.getenv(
+        name,
+        str(default),
+    ).strip()
+
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"{name} must be an integer; got {raw!r}."
+        ) from exc
+
+    if minimum is not None and value < minimum:
+        raise ValueError(
+            f"{name} must be >= {minimum}; got {value}."
+        )
+
+    return value
+
+
+def _env_float(
+    name: str,
+    default: float,
+) -> float:
+    raw = os.getenv(
+        name,
+        str(default),
+    ).strip()
+
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"{name} must be a number; got {raw!r}."
+        ) from exc
+
+    if value != value or value in {
+        float("inf"),
+        float("-inf"),
+    }:
+        raise ValueError(
+            f"{name} must be finite; got {raw!r}."
+        )
+
+    return value
+
+
+def _env_bool(
+    name: str,
+    default: bool,
+) -> bool:
+    raw = os.getenv(
+        name,
+        "true" if default else "false",
+    ).strip().lower()
+
+    if raw in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return True
+
+    if raw in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
+        return False
+
+    raise ValueError(
+        f"{name} must be one of "
+        "true/false, yes/no, on/off, or 1/0."
+    )
+
+
+# ---------------------------------------------------------------------------
 # PREDICTION HORIZONS
 # ---------------------------------------------------------------------------
-# Apex evaluates all supported forward horizons from the same canonical
-# market-data snapshot.
-#
 # These are prediction horizons, NOT Angel One candle intervals.
 #
 # Supported horizons:
@@ -21,12 +128,18 @@ VERSION = "2.2.0"
 #     30 minutes
 #     60 minutes
 #
+# The same canonical market-data snapshot can be used by all four horizons.
 # Angel One remains on ONE_MINUTE candles.
 # ---------------------------------------------------------------------------
 
-SUPPORTED_PREDICTION_HORIZONS_MINUTES = (5, 15, 30, 60)
+SUPPORTED_PREDICTION_HORIZONS_MINUTES = (
+    5,
+    15,
+    30,
+    60,
+)
 
-_configured_horizons_raw = os.getenv(
+_configured_horizons_raw = _env_str(
     "APEX_HORIZONS_MINUTES",
     "5,15,30,60",
 )
@@ -47,7 +160,9 @@ except ValueError as exc:
     ) from exc
 
 
-if _configured_horizons != SUPPORTED_PREDICTION_HORIZONS_MINUTES:
+if _configured_horizons != (
+    SUPPORTED_PREDICTION_HORIZONS_MINUTES
+):
     raise ValueError(
         "APEX_HORIZONS_MINUTES must contain exactly "
         "5,15,30,60."
@@ -63,53 +178,63 @@ PREDICTION_HORIZONS_MINUTES = (
 # ---------------------------------------------------------------------------
 # BACKWARD COMPATIBILITY
 # ---------------------------------------------------------------------------
-# Some existing modules still import PREDICTION_HORIZON_MINUTES.
-# Keep it as a compatibility alias, but DO NOT use it for multi-horizon
-# runtime execution.
+# Existing modules such as the current Streamlit runner still import
+# PREDICTION_HORIZON_MINUTES. Keep that name so the existing architecture
+# does not break, but make 5 minutes the default fallback rather than 60.
 #
-# The default display/fallback horizon is now 5 minutes, not 60 minutes.
+# Multi-horizon execution must use PREDICTION_HORIZONS_MINUTES.
 # ---------------------------------------------------------------------------
 
 DEFAULT_PREDICTION_HORIZON_MINUTES = 5
 
-PREDICTION_HORIZON_MINUTES = int(
-    os.getenv(
-        "APEX_HORIZON_MINUTES",
-        str(DEFAULT_PREDICTION_HORIZON_MINUTES),
-    )
+PREDICTION_HORIZON_MINUTES = _env_int(
+    "APEX_HORIZON_MINUTES",
+    DEFAULT_PREDICTION_HORIZON_MINUTES,
+    minimum=1,
 )
 
-if PREDICTION_HORIZON_MINUTES not in PREDICTION_HORIZONS_MINUTES:
+if (
+    PREDICTION_HORIZON_MINUTES
+    not in PREDICTION_HORIZONS_MINUTES
+):
     raise ValueError(
         "APEX_HORIZON_MINUTES must be one of "
-        f"{PREDICTION_HORIZONS_MINUTES}."
+        f"{PREDICTION_HORIZONS_MINUTES}; got "
+        f"{PREDICTION_HORIZON_MINUTES}."
     )
 
 
 # ---------------------------------------------------------------------------
-# DATA MODE
+# DATA MODE / PROVIDER
 # ---------------------------------------------------------------------------
 
-DATA_MODE = os.getenv(
+DATA_MODE = _env_str(
     "APEX_DATA_MODE",
     "live",
-).strip().lower()
+).lower()
 
-DATA_PROVIDER = os.getenv(
+if DATA_MODE not in {
+    "live",
+    "demo",
+}:
+    raise ValueError(
+        "APEX_DATA_MODE must be 'live' or 'demo'."
+    )
+
+DATA_PROVIDER = _env_str(
     "APEX_DATA_PROVIDER",
     "",
-).strip()
+)
 
 
 # ---------------------------------------------------------------------------
 # LIVE DATA
 # ---------------------------------------------------------------------------
 
-LIVE_DATA_MAX_AGE_SECONDS = int(
-    os.getenv(
-        "APEX_LIVE_DATA_MAX_AGE_SECONDS",
-        "120",
-    )
+LIVE_DATA_MAX_AGE_SECONDS = _env_int(
+    "APEX_LIVE_DATA_MAX_AGE_SECONDS",
+    120,
+    minimum=1,
 )
 
 
@@ -117,47 +242,57 @@ LIVE_DATA_MAX_AGE_SECONDS = int(
 # ANGEL ONE
 # ---------------------------------------------------------------------------
 # IMPORTANT:
-# This is the MARKET-DATA interval.
+# This is the MARKET-DATA candle interval.
 # It is intentionally NOT tied to prediction horizons.
 #
 # Keep:
 #     ONE_MINUTE
 #
-# Do NOT change this to 5/15/30/60 minute candles for this architecture.
+# Do NOT change this to 5/15/30/60 minute candles merely because Apex
+# predicts those horizons.
 # ---------------------------------------------------------------------------
 
-ANGELONE_EXCHANGE = os.getenv(
+ANGELONE_EXCHANGE = _env_str(
     "ANGELONE_EXCHANGE",
     "NSE",
-).strip().upper()
+).upper()
 
-ANGELONE_SYMBOL = os.getenv(
+ANGELONE_SYMBOL = _env_str(
     "ANGELONE_SYMBOL",
     "NIFTY",
-).strip()
-
-ANGELONE_SYMBOL_TOKEN = os.getenv(
-    "ANGELONE_SYMBOL_TOKEN",
-    "",
-).strip()
-
-ANGELONE_INTERVAL = os.getenv(
-    "ANGELONE_INTERVAL",
-    "ONE_MINUTE",
-).strip().upper()
-
-ANGELONE_HISTORY_BARS = int(
-    os.getenv(
-        "ANGELONE_HISTORY_BARS",
-        "120",
-    )
 )
 
-ANGELONE_LOOKBACK_MINUTES = int(
-    os.getenv(
-        "ANGELONE_LOOKBACK_MINUTES",
-        "240",
+ANGELONE_SYMBOL_TOKEN = _env_str(
+    "ANGELONE_SYMBOL_TOKEN",
+    "",
+)
+
+ANGELONE_TRADINGSYMBOL = _env_str(
+    "ANGELONE_TRADINGSYMBOL",
+    "",
+)
+
+ANGELONE_INTERVAL = _env_str(
+    "ANGELONE_INTERVAL",
+    "ONE_MINUTE",
+).upper()
+
+if ANGELONE_INTERVAL != "ONE_MINUTE":
+    raise ValueError(
+        "ANGELONE_INTERVAL must remain ONE_MINUTE for the "
+        "canonical Apex multi-horizon architecture."
     )
+
+ANGELONE_HISTORY_BARS = _env_int(
+    "ANGELONE_HISTORY_BARS",
+    120,
+    minimum=20,
+)
+
+ANGELONE_LOOKBACK_MINUTES = _env_int(
+    "ANGELONE_LOOKBACK_MINUTES",
+    240,
+    minimum=30,
 )
 
 
@@ -165,7 +300,7 @@ ANGELONE_LOOKBACK_MINUTES = int(
 # RUNTIME
 # ---------------------------------------------------------------------------
 
-INCOMING_DIR = os.getenv(
+INCOMING_DIR = _env_str(
     "APEX_INCOMING_DIR",
     "incoming",
 )
@@ -175,57 +310,58 @@ INCOMING_DIR = os.getenv(
 # DECISION THRESHOLDS
 # ---------------------------------------------------------------------------
 
-UP_THRESHOLD = float(
-    os.getenv(
-        "APEX_UP_THRESHOLD",
-        "0.15",
-    )
+UP_THRESHOLD = _env_float(
+    "APEX_UP_THRESHOLD",
+    0.15,
 )
 
-DOWN_THRESHOLD = float(
-    os.getenv(
-        "APEX_DOWN_THRESHOLD",
-        "-0.15",
-    )
+DOWN_THRESHOLD = _env_float(
+    "APEX_DOWN_THRESHOLD",
+    -0.15,
 )
 
-MIN_CONFIDENCE_FOR_SIGNAL = float(
-    os.getenv(
-        "APEX_MIN_CONFIDENCE",
-        "0.60",
+if UP_THRESHOLD <= DOWN_THRESHOLD:
+    raise ValueError(
+        "APEX_UP_THRESHOLD must be greater than "
+        "APEX_DOWN_THRESHOLD."
     )
+
+MIN_CONFIDENCE_FOR_SIGNAL = _env_float(
+    "APEX_MIN_CONFIDENCE",
+    0.60,
 )
 
-MIN_HISTORY_BARS = int(
-    os.getenv(
-        "APEX_MIN_HISTORY_BARS",
-        "30",
+if not 0.0 <= MIN_CONFIDENCE_FOR_SIGNAL <= 1.0:
+    raise ValueError(
+        "APEX_MIN_CONFIDENCE must be between 0.0 and 1.0."
     )
+
+MIN_HISTORY_BARS = _env_int(
+    "APEX_MIN_HISTORY_BARS",
+    30,
+    minimum=1,
 )
 
 
 # ---------------------------------------------------------------------------
 # DATA SAFETY
 # ---------------------------------------------------------------------------
+# SignalGate uses this configuration to withhold directional output when
+# live market data is not sufficiently fresh.
+# ---------------------------------------------------------------------------
 
-REQUIRE_FRESH_DATA_FOR_SIGNAL = os.getenv(
+REQUIRE_FRESH_DATA_FOR_SIGNAL = _env_bool(
     "APEX_REQUIRE_FRESH_DATA_FOR_SIGNAL",
-    "true",
-).strip().lower() not in {
-    "0",
-    "false",
-    "no",
-    "off",
-}
+    True,
+)
 
 
 # ---------------------------------------------------------------------------
 # NEWS
 # ---------------------------------------------------------------------------
 
-NEWS_LOOKBACK_HOURS = int(
-    os.getenv(
-        "APEX_NEWS_LOOKBACK_HOURS",
-        "24",
-    )
+NEWS_LOOKBACK_HOURS = _env_int(
+    "APEX_NEWS_LOOKBACK_HOURS",
+    24,
+    minimum=1,
 )
