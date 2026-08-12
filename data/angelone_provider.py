@@ -15,7 +15,7 @@ This module contains NO order-placement or GTT operations.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
@@ -32,17 +32,21 @@ IST = ZoneInfo("Asia/Kolkata")
 
 class AngelOneProvider:
     name = "AngelOneSmartAPI"
-    version = "2.1.0"
+    version = "2.2.0"
 
-    # ---------------------------------------------------------------
+    # ================================================================
     # NSE MARKET SESSION
-    # ---------------------------------------------------------------
+    # ================================================================
 
     NSE_MARKET_OPEN_HOUR = 9
     NSE_MARKET_OPEN_MINUTE = 15
 
     NSE_MARKET_CLOSE_HOUR = 15
     NSE_MARKET_CLOSE_MINUTE = 30
+
+    # ================================================================
+    # INITIALIZATION
+    # ================================================================
 
     def __init__(self) -> None:
 
@@ -52,9 +56,9 @@ class AngelOneProvider:
                 "Install smartapi-python and pyotp."
             )
 
-        # -----------------------------------------------------------
+        # ------------------------------------------------------------
         # CREDENTIALS
-        # -----------------------------------------------------------
+        # ------------------------------------------------------------
 
         self.api_key = self._secret(
             "ANGELONE_API_KEY"
@@ -72,9 +76,9 @@ class AngelOneProvider:
             "ANGELONE_TOTP_SECRET"
         )
 
-        # -----------------------------------------------------------
-        # DEFAULT INSTRUMENT
-        # -----------------------------------------------------------
+        # ------------------------------------------------------------
+        # DEFAULT EXCHANGE / SYMBOL
+        # ------------------------------------------------------------
 
         self.exchange = self._secret(
             "ANGELONE_EXCHANGE",
@@ -91,9 +95,9 @@ class AngelOneProvider:
             "",
         ).strip()
 
-        # -----------------------------------------------------------
+        # ------------------------------------------------------------
         # HISTORICAL DATA SETTINGS
-        # -----------------------------------------------------------
+        # ------------------------------------------------------------
 
         self.interval = self._secret(
             "ANGELONE_INTERVAL",
@@ -120,9 +124,9 @@ class AngelOneProvider:
             ),
         )
 
-        # -----------------------------------------------------------
-        # VALIDATE REQUIRED SECRETS
-        # -----------------------------------------------------------
+        # ------------------------------------------------------------
+        # REQUIRED SECRET VALIDATION
+        # ------------------------------------------------------------
 
         missing = [
             key
@@ -141,9 +145,9 @@ class AngelOneProvider:
                 + ", ".join(missing)
             )
 
-        # -----------------------------------------------------------
+        # ------------------------------------------------------------
         # SMART API CLIENT
-        # -----------------------------------------------------------
+        # ------------------------------------------------------------
 
         self.client = SmartConnect(
             api_key=self.api_key
@@ -153,31 +157,33 @@ class AngelOneProvider:
 
         self.feed_token = ""
 
-        # -----------------------------------------------------------
-        # INSTRUMENT CACHE
+        # ------------------------------------------------------------
+        # RESOLVED INSTRUMENT CACHE
         #
-        # key:
-        #     NSE:NIFTY
-        #     MCX:GOLD
+        # Examples:
+        #
+        # NSE:NIFTY
+        # NSE:SBIN
+        # MCX:GOLD
         #
         # value:
-        #     (tradingsymbol, symboltoken)
-        # -----------------------------------------------------------
+        # (tradingsymbol, symboltoken)
+        # ------------------------------------------------------------
 
         self._resolved_instruments: dict[
             str,
             tuple[str, str],
         ] = {}
 
-        # -----------------------------------------------------------
+        # ------------------------------------------------------------
         # LOGIN
-        # -----------------------------------------------------------
+        # ------------------------------------------------------------
 
         self._login()
 
-    # ==================================================================
+    # ================================================================
     # SECRET ACCESS
-    # ==================================================================
+    # ================================================================
 
     @staticmethod
     def _secret(
@@ -189,7 +195,9 @@ class AngelOneProvider:
         try:
             import streamlit as st
 
-            value = st.secrets.get(name)
+            value = st.secrets.get(
+                name
+            )
 
             if value is not None:
                 return str(value)
@@ -203,9 +211,9 @@ class AngelOneProvider:
             default,
         )
 
-    # ==================================================================
+    # ================================================================
     # AUTHENTICATION
-    # ==================================================================
+    # ================================================================
 
     def _login(self) -> None:
 
@@ -223,19 +231,26 @@ class AngelOneProvider:
             not isinstance(response, dict)
             or not response.get("status")
         ):
+
             message = (
                 response.get(
                     "message",
                     "Angel One login failed",
                 )
-                if isinstance(response, dict)
+                if isinstance(
+                    response,
+                    dict,
+                )
                 else "Angel One login failed"
             )
 
-            raise RuntimeError(message)
+            raise RuntimeError(
+                message
+            )
 
         self.session = (
-            response.get("data") or {}
+            response.get("data")
+            or {}
         )
 
         self.feed_token = (
@@ -256,9 +271,9 @@ class AngelOneProvider:
                 "without feedToken."
             )
 
-    # ==================================================================
+    # ================================================================
     # INSTRUMENT RESOLUTION
-    # ==================================================================
+    # ================================================================
 
     def _resolve_instrument(
         self,
@@ -267,7 +282,8 @@ class AngelOneProvider:
     ) -> tuple[str, str]:
 
         requested = (
-            symbol or self.symbol
+            symbol
+            or self.symbol
         ).strip()
 
         if not requested:
@@ -276,36 +292,46 @@ class AngelOneProvider:
             )
 
         target_exchange = (
-            exchange or self.exchange
+            exchange
+            or self.exchange
         ).strip().upper()
+
+        if not target_exchange:
+            raise RuntimeError(
+                "Angel One exchange is empty."
+            )
 
         cache_key = (
             f"{target_exchange}:"
             f"{requested.upper()}"
         )
 
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
         # CACHE
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
 
-        cached = self._resolved_instruments.get(
-            cache_key
+        cached = (
+            self._resolved_instruments.get(
+                cache_key
+            )
         )
 
         if cached:
             return cached
 
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
         # CONFIGURED TOKEN
         #
-        # Only use the configured token for
-        # the configured default instrument.
-        # --------------------------------------------------------------
+        # Only use the configured token when
+        # it belongs to the configured default
+        # exchange + symbol.
+        # ------------------------------------------------------------
 
         configured_token = (
             self.symbol_token
             if (
-                target_exchange == self.exchange
+                target_exchange
+                == self.exchange
                 and requested.upper()
                 == self.symbol.upper()
             )
@@ -325,9 +351,9 @@ class AngelOneProvider:
 
             return result
 
-        # --------------------------------------------------------------
-        # NIFTY 50 STANDARD TOKEN
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
+        # NIFTY 50 INDEX
+        # ------------------------------------------------------------
 
         if (
             target_exchange == "NSE"
@@ -350,12 +376,14 @@ class AngelOneProvider:
 
             return result
 
-        # --------------------------------------------------------------
-        # SEARCH ANGEL ONE
+        # ------------------------------------------------------------
+        # ANGEL ONE SEARCH SCRIP
         #
-        # Used for MCX commodities and other
-        # dynamically resolved instruments.
-        # --------------------------------------------------------------
+        # Used for:
+        # - NSE equities
+        # - MCX commodities
+        # - other supported instruments
+        # ------------------------------------------------------------
 
         response = self.client.searchScrip(
             target_exchange,
@@ -363,23 +391,37 @@ class AngelOneProvider:
         )
 
         if (
-            not isinstance(response, dict)
-            or not response.get("status")
+            not isinstance(
+                response,
+                dict,
+            )
+            or not response.get(
+                "status"
+            )
         ):
+
             message = (
                 response.get(
                     "message",
                     "Angel One symbol lookup failed",
                 )
-                if isinstance(response, dict)
+                if isinstance(
+                    response,
+                    dict,
+                )
                 else "Angel One symbol lookup failed"
             )
 
-            raise RuntimeError(message)
+            raise RuntimeError(
+                message
+            )
 
-        rows = response.get(
-            "data"
-        ) or []
+        rows = (
+            response.get(
+                "data"
+            )
+            or []
+        )
 
         if not rows:
             raise RuntimeError(
@@ -388,13 +430,24 @@ class AngelOneProvider:
                 f"on {target_exchange}."
             )
 
+        # ------------------------------------------------------------
+        # USABLE CANDIDATES
+        # ------------------------------------------------------------
+
         candidates = [
             row
             for row in rows
             if (
-                isinstance(row, dict)
-                and row.get("symboltoken")
-                and row.get("tradingsymbol")
+                isinstance(
+                    row,
+                    dict,
+                )
+                and row.get(
+                    "symboltoken"
+                )
+                and row.get(
+                    "tradingsymbol"
+                )
             )
         ]
 
@@ -404,13 +457,13 @@ class AngelOneProvider:
                 f"instrument for '{requested}'."
             )
 
-        # --------------------------------------------------------------
-        # EXACT MATCH
-        # --------------------------------------------------------------
-
         requested_upper = (
             requested.upper()
         )
+
+        # ------------------------------------------------------------
+        # EXACT MATCH
+        # ------------------------------------------------------------
 
         exact = [
             row
@@ -424,25 +477,43 @@ class AngelOneProvider:
             == requested_upper
         ]
 
+        # ------------------------------------------------------------
+        # NSE EQUITY MATCH
+        #
+        # Example:
+        #
+        # SBIN -> SBIN-EQ
+        # ------------------------------------------------------------
+
+        equity = [
+            row
+            for row in candidates
+            if str(
+                row.get(
+                    "tradingsymbol",
+                    "",
+                )
+            ).upper()
+            == f"{requested_upper}-EQ"
+        ]
+
         if exact:
+
             chosen = exact[0]
+
+        elif equity:
+
+            chosen = equity[0]
 
         else:
 
-            # ----------------------------------------------------------
-            # MCX COMMODITY MATCHING
+            # --------------------------------------------------------
+            # PREFIX MATCH
             #
-            # For requests such as:
-            #
-            #     GOLD
-            #     SILVER
-            #     CRUDEOIL
-            #
-            # Angel One may return multiple futures contracts.
-            #
-            # Prefer a futures-like contract whose symbol begins
-            # with the requested commodity name.
-            # ----------------------------------------------------------
+            # GOLD -> GOLD...
+            # SILVER -> SILVER...
+            # CRUDEOIL -> CRUDEOIL...
+            # --------------------------------------------------------
 
             prefix_candidates = [
                 row
@@ -465,11 +536,18 @@ class AngelOneProvider:
                     )
                 )
 
-            else:
+            elif target_exchange == "MCX":
 
-                # ------------------------------------------------------
-                # LAST SAFE FALLBACK
-                # ------------------------------------------------------
+                # Never silently choose an unrelated
+                # commodity contract.
+                raise RuntimeError(
+                    f"Angel One found MCX candidates "
+                    f"for '{requested}', but none "
+                    "matched the requested commodity "
+                    "prefix."
+                )
+
+            else:
 
                 chosen = (
                     self._choose_best_contract(
@@ -478,11 +556,15 @@ class AngelOneProvider:
                 )
 
         trading_symbol = str(
-            chosen["tradingsymbol"]
+            chosen[
+                "tradingsymbol"
+            ]
         )
 
         token = str(
-            chosen["symboltoken"]
+            chosen[
+                "symboltoken"
+            ]
         )
 
         result = (
@@ -496,13 +578,15 @@ class AngelOneProvider:
 
         return result
 
-    # ==================================================================
-    # CONTRACT SELECTION
-    # ==================================================================
+    # ================================================================
+    # BEST FUTURES CONTRACT
+    # ================================================================
 
     @staticmethod
     def _choose_best_contract(
-        candidates: list[dict[str, Any]],
+        candidates: list[
+            dict[str, Any]
+        ],
     ) -> dict[str, Any]:
 
         if not candidates:
@@ -510,24 +594,13 @@ class AngelOneProvider:
                 "No Angel One instrument candidates."
             )
 
-        # --------------------------------------------------------------
-        # Try to select the nearest future expiry.
-        #
-        # Angel One search results may expose expiry in fields such as:
-        #
-        #     expiry
-        #
-        # Some instruments may not have expiry information.
-        # Those are retained as fallback candidates.
-        # --------------------------------------------------------------
-
         today = datetime.now(
             IST
         ).date()
 
         dated: list[
             tuple[
-                datetime,
+                date,
                 dict[str, Any],
             ]
         ] = []
@@ -552,17 +625,14 @@ class AngelOneProvider:
                 )
             )
 
-            if parsed is None:
-                continue
-
-            if parsed >= today:
+            if (
+                parsed is not None
+                and parsed >= today
+            ):
 
                 dated.append(
                     (
-                        datetime.combine(
-                            parsed,
-                            datetime.min.time(),
-                        ),
+                        parsed,
                         row,
                     )
                 )
@@ -576,21 +646,21 @@ class AngelOneProvider:
 
             return dated[0][1]
 
-        # --------------------------------------------------------------
-        # If expiry information is unavailable,
-        # prefer the first valid candidate.
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
+        # No usable expiry field.
+        # Use first validated candidate.
+        # ------------------------------------------------------------
 
         return candidates[0]
 
-    # ==================================================================
+    # ================================================================
     # EXPIRY PARSER
-    # ==================================================================
+    # ================================================================
 
     @staticmethod
     def _parse_expiry_date(
         value: str,
-    ) -> Optional[Any]:
+    ) -> Optional[date]:
 
         formats = (
             "%d%b%Y",
@@ -605,31 +675,33 @@ class AngelOneProvider:
         for fmt in formats:
 
             try:
+
                 return datetime.strptime(
                     value.upper(),
                     fmt,
                 ).date()
 
             except ValueError:
+
                 continue
 
         return None
 
-    # ==================================================================
+    # ================================================================
     # LTP
-    # ==================================================================
+    # ================================================================
 
     def _fetch_ltp(
         self,
         symbol: Optional[str] = None,
         exchange: Optional[str] = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[
+        dict[str, Any]
+    ]:
 
-        # IMPORTANT:
-        # Resolve the target exchange from the argument
-        # or provider default.
         target_exchange = (
-            exchange or self.exchange
+            exchange
+            or self.exchange
         ).strip().upper()
 
         trading_symbol, token = (
@@ -646,22 +718,36 @@ class AngelOneProvider:
         )
 
         if (
-            not isinstance(response, dict)
-            or not response.get("status")
+            not isinstance(
+                response,
+                dict,
+            )
+            or not response.get(
+                "status"
+            )
         ):
+
             message = (
                 response.get(
                     "message",
                     "Angel One LTP request failed",
                 )
-                if isinstance(response, dict)
+                if isinstance(
+                    response,
+                    dict,
+                )
                 else "Angel One LTP request failed"
             )
 
-            raise RuntimeError(message)
+            raise RuntimeError(
+                message
+            )
 
         data = (
-            response.get("data") or {}
+            response.get(
+                "data"
+            )
+            or {}
         )
 
         price = data.get(
@@ -673,9 +759,9 @@ class AngelOneProvider:
                 "Angel One returned no LTP value."
             )
 
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
         # EXCHANGE TIMESTAMP
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
 
         timestamp = (
             self._parse_exchange_timestamp(
@@ -688,69 +774,76 @@ class AngelOneProvider:
             )
         )
 
-        record = {
-            "symbol": trading_symbol,
-
-            "timestamp": (
-                timestamp.isoformat()
-                if timestamp
-                else None
-            ),
-
-            "price": float(
-                price
-            ),
-
-            "close": float(
-                price
-            ),
-
-            "open": self._float_or_none(
-                data.get("open")
-            ),
-
-            "high": self._float_or_none(
-                data.get("high")
-            ),
-
-            "low": self._float_or_none(
-                data.get("low")
-            ),
-
-            "volume": self._float_or_none(
-                data.get("tradeVolume")
-            ),
-
-            "change_pct": self._float_or_none(
-                data.get("percentChange")
-            ),
-
-            "exchange": target_exchange,
-
-            "symbol_token": token,
-
-            "source": (
-                "angelone_smartapi_ltp"
-            ),
-
-            "live": True,
-
-            "data_type": "ltp",
-
-            "timestamp_source": (
-                "angelone_exchange"
-                if timestamp
-                else "unavailable"
-            ),
-        }
-
         return [
-            record
+            {
+                "symbol": trading_symbol,
+
+                "timestamp": (
+                    timestamp.isoformat()
+                    if timestamp
+                    else None
+                ),
+
+                "price": float(
+                    price
+                ),
+
+                "close": float(
+                    price
+                ),
+
+                "open": self._float_or_none(
+                    data.get(
+                        "open"
+                    )
+                ),
+
+                "high": self._float_or_none(
+                    data.get(
+                        "high"
+                    )
+                ),
+
+                "low": self._float_or_none(
+                    data.get(
+                        "low"
+                    )
+                ),
+
+                "volume": self._float_or_none(
+                    data.get(
+                        "tradeVolume"
+                    )
+                ),
+
+                "change_pct": self._float_or_none(
+                    data.get(
+                        "percentChange"
+                    )
+                ),
+
+                "exchange": target_exchange,
+
+                "symbol_token": token,
+
+                "source":
+                    "angelone_smartapi_ltp",
+
+                "live": True,
+
+                "data_type": "ltp",
+
+                "timestamp_source": (
+                    "angelone_exchange"
+                    if timestamp
+                    else "unavailable"
+                ),
+            }
         ]
 
-    # ==================================================================
+    # ================================================================
     # NUMERIC HELPER
-    # ==================================================================
+    # ================================================================
 
     @staticmethod
     def _float_or_none(
@@ -770,11 +863,12 @@ class AngelOneProvider:
             TypeError,
             ValueError,
         ):
+
             return None
 
-    # ==================================================================
+    # ================================================================
     # TIMESTAMP PARSER
-    # ==================================================================
+    # ================================================================
 
     @staticmethod
     def _parse_exchange_timestamp(
@@ -787,10 +881,6 @@ class AngelOneProvider:
         text = str(
             value
         ).strip()
-
-        # --------------------------------------------------------------
-        # Angel One common formats
-        # --------------------------------------------------------------
 
         formats = (
             "%d-%b-%Y %H:%M:%S",
@@ -816,11 +906,12 @@ class AngelOneProvider:
                 )
 
             except ValueError:
+
                 continue
 
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
         # ISO-8601 fallback
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
 
         try:
 
@@ -845,32 +936,32 @@ class AngelOneProvider:
 
             return None
 
-    # ==================================================================
+    # ================================================================
     # NSE SESSION HELPERS
-    # ==================================================================
+    # ================================================================
 
     @classmethod
     def _nse_session_bounds(
         cls,
-        date,
+        trading_date: date,
     ) -> tuple[
         datetime,
         datetime,
     ]:
 
         start = datetime(
-            date.year,
-            date.month,
-            date.day,
+            trading_date.year,
+            trading_date.month,
+            trading_date.day,
             cls.NSE_MARKET_OPEN_HOUR,
             cls.NSE_MARKET_OPEN_MINUTE,
             tzinfo=IST,
         )
 
         end = datetime(
-            date.year,
-            date.month,
-            date.day,
+            trading_date.year,
+            trading_date.month,
+            trading_date.day,
             cls.NSE_MARKET_CLOSE_HOUR,
             cls.NSE_MARKET_CLOSE_MINUTE,
             tzinfo=IST,
@@ -884,19 +975,22 @@ class AngelOneProvider:
     @classmethod
     def _is_nse_trading_day(
         cls,
-        date,
+        trading_date: date,
     ) -> bool:
 
-        return date.weekday() < 5
+        return (
+            trading_date.weekday()
+            < 5
+        )
 
     @classmethod
     def _previous_nse_trading_day(
         cls,
-        date,
-    ):
+        trading_date: date,
+    ) -> date:
 
         current = (
-            date
+            trading_date
             - timedelta(
                 days=1
             )
@@ -912,9 +1006,9 @@ class AngelOneProvider:
 
         return current
 
-    # ==================================================================
+    # ================================================================
     # SESSION-AWARE HISTORICAL WINDOW
-    # ==================================================================
+    # ================================================================
 
     def _session_aware_window(
         self,
@@ -927,12 +1021,13 @@ class AngelOneProvider:
     ]:
 
         target_exchange = (
-            exchange or self.exchange
+            exchange
+            or self.exchange
         ).strip().upper()
 
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
         # NSE
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
 
         if target_exchange == "NSE":
 
@@ -948,8 +1043,8 @@ class AngelOneProvider:
                 )
             )
 
-            # Before market open / weekend:
-            # use previous trading session.
+            # Before market open or weekend:
+            # use previous NSE trading session.
             if (
                 not self._is_nse_trading_day(
                     local_end.date()
@@ -980,7 +1075,7 @@ class AngelOneProvider:
                     session_close
                 )
 
-            # During session.
+            # During market session.
             else:
 
                 effective_end = (
@@ -997,9 +1092,10 @@ class AngelOneProvider:
                 )
             )
 
-            # Do not start before this session's
-            # opening time.
-            if effective_start < session_open:
+            if (
+                effective_start
+                < session_open
+            ):
 
                 effective_start = (
                     session_open
@@ -1010,12 +1106,12 @@ class AngelOneProvider:
                 effective_end,
             )
 
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
         # MCX / OTHER EXCHANGES
         #
-        # We intentionally do NOT apply NSE's
-        # 09:15-15:30 session rules here.
-        # --------------------------------------------------------------
+        # Do NOT apply NSE 09:15-15:30
+        # session rules to commodities.
+        # ------------------------------------------------------------
 
         return (
             end_dt
@@ -1028,9 +1124,9 @@ class AngelOneProvider:
             end_dt,
         )
 
-    # ==================================================================
+    # ================================================================
     # HISTORICAL WINDOW
-    # ==================================================================
+    # ================================================================
 
     def _historical_window(
         self,
@@ -1086,48 +1182,49 @@ class AngelOneProvider:
                     text
                 )
 
-                if dt.tzinfo is None:
-
-                    dt = dt.replace(
-                        tzinfo=IST
-                    )
-
-                return dt.astimezone(
-                    IST
-                )
-
             except ValueError:
 
                 return None
 
-        # --------------------------------------------------------------
+            if dt.tzinfo is None:
+
+                dt = dt.replace(
+                    tzinfo=IST
+                )
+
+            return dt.astimezone(
+                IST
+            )
+
+        # ------------------------------------------------------------
         # END
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
 
         end_dt = (
             parse(end)
             or now_ist
         )
 
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
         # START
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
 
         start_dt = parse(
             start
         )
 
-        # --------------------------------------------------------------
-        # EXCHANGE
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
+        # TARGET EXCHANGE
+        # ------------------------------------------------------------
 
         target_exchange = (
-            exchange or self.exchange
+            exchange
+            or self.exchange
         ).strip().upper()
 
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
         # AUTOMATIC WINDOW
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
 
         if start_dt is None:
 
@@ -1147,9 +1244,9 @@ class AngelOneProvider:
                 )
             )
 
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
         # INVALID RANGE SAFETY
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
 
         if start_dt >= end_dt:
 
@@ -1165,9 +1262,9 @@ class AngelOneProvider:
             end_dt,
         )
 
-    # ==================================================================
+    # ================================================================
     # HISTORICAL CANDLES
-    # ==================================================================
+    # ================================================================
 
     def _fetch_candles(
         self,
@@ -1176,13 +1273,13 @@ class AngelOneProvider:
         end: Any = None,
         limit: Optional[int] = None,
         exchange: Optional[str] = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[
+        dict[str, Any]
+    ]:
 
-        # IMPORTANT:
-        # Never reference target_exchange before
-        # assigning it.
         target_exchange = (
-            exchange or self.exchange
+            exchange
+            or self.exchange
         ).strip().upper()
 
         trading_symbol, token = (
@@ -1193,9 +1290,8 @@ class AngelOneProvider:
         )
 
         # IMPORTANT:
-        # Pass target_exchange down so MCX does
-        # not accidentally use the provider's
-        # default NSE exchange.
+        # Pass the actual selected exchange
+        # into historical-window calculation.
         start_dt, end_dt = (
             self._historical_window(
                 start=start,
@@ -1206,19 +1302,24 @@ class AngelOneProvider:
         )
 
         params = {
-            "exchange": target_exchange,
+            "exchange":
+                target_exchange,
 
-            "symboltoken": token,
+            "symboltoken":
+                token,
 
-            "interval": self.interval,
+            "interval":
+                self.interval,
 
-            "fromdate": start_dt.strftime(
-                "%Y-%m-%d %H:%M"
-            ),
+            "fromdate":
+                start_dt.strftime(
+                    "%Y-%m-%d %H:%M"
+                ),
 
-            "todate": end_dt.strftime(
-                "%Y-%m-%d %H:%M"
-            ),
+            "todate":
+                end_dt.strftime(
+                    "%Y-%m-%d %H:%M"
+                ),
         }
 
         response = (
@@ -1267,9 +1368,9 @@ class AngelOneProvider:
 
         for row in rows:
 
-            # ----------------------------------------------------------
-            # Validate candle row
-            # ----------------------------------------------------------
+            # --------------------------------------------------------
+            # Validate candle row.
+            # --------------------------------------------------------
 
             if (
                 not isinstance(
@@ -1280,9 +1381,9 @@ class AngelOneProvider:
             ):
                 continue
 
-            # ----------------------------------------------------------
-            # Timestamp
-            # ----------------------------------------------------------
+            # --------------------------------------------------------
+            # Timestamp.
+            # --------------------------------------------------------
 
             timestamp = (
                 self._parse_exchange_timestamp(
@@ -1325,9 +1426,9 @@ class AngelOneProvider:
 
                     continue
 
-            # ----------------------------------------------------------
-            # OHLCV
-            # ----------------------------------------------------------
+            # --------------------------------------------------------
+            # OHLCV.
+            # --------------------------------------------------------
 
             try:
 
@@ -1358,54 +1459,62 @@ class AngelOneProvider:
 
                 continue
 
-            # ----------------------------------------------------------
-            # NORMALIZED RECORD
-            # ----------------------------------------------------------
+            # --------------------------------------------------------
+            # NORMALIZED RECORD.
+            # --------------------------------------------------------
 
             records.append(
                 {
-                    "symbol": trading_symbol,
+                    "symbol":
+                        trading_symbol,
 
-                    "timestamp": (
-                        timestamp.isoformat()
-                    ),
+                    "timestamp":
+                        timestamp.isoformat(),
 
-                    "open": open_price,
+                    "open":
+                        open_price,
 
-                    "high": high,
+                    "high":
+                        high,
 
-                    "low": low,
+                    "low":
+                        low,
 
-                    "close": close,
+                    "close":
+                        close,
 
-                    "volume": volume,
+                    "volume":
+                        volume,
 
-                    "exchange": target_exchange,
+                    "exchange":
+                        target_exchange,
 
-                    "symbol_token": token,
+                    "symbol_token":
+                        token,
 
-                    "source": (
-                        "angelone_smartapi_candles"
-                    ),
+                    "source":
+                        "angelone_smartapi_candles",
 
-                    "live": False,
+                    "live":
+                        False,
 
-                    "data_type": "candle",
+                    "data_type":
+                        "candle",
                 }
             )
 
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
         # CHRONOLOGICAL ORDER
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
 
         records.sort(
             key=lambda item:
             item["timestamp"]
         )
 
-        # --------------------------------------------------------------
-        # APPLY LIMIT
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
+        # LIMIT
+        # ------------------------------------------------------------
 
         if limit:
 
@@ -1418,9 +1527,9 @@ class AngelOneProvider:
 
         return records
 
-    # ==================================================================
+    # ================================================================
     # PUBLIC PROVIDER CONTRACT
-    # ==================================================================
+    # ================================================================
 
     def fetch(
         self,
@@ -1429,7 +1538,9 @@ class AngelOneProvider:
         end: Any = None,
         limit: Optional[int] = None,
         **kwargs: Any,
-    ) -> list[dict[str, Any]]:
+    ) -> list[
+        dict[str, Any]
+    ]:
 
         target_exchange = (
             kwargs.get(
@@ -1438,9 +1549,9 @@ class AngelOneProvider:
             or self.exchange
         ).strip().upper()
 
-        # --------------------------------------------------------------
-        # Historical request
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
+        # HISTORICAL REQUEST
+        # ------------------------------------------------------------
 
         if (
             start is not None
@@ -1459,18 +1570,18 @@ class AngelOneProvider:
                 exchange=target_exchange,
             )
 
-        # --------------------------------------------------------------
-        # Live LTP request
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
+        # LIVE LTP REQUEST
+        # ------------------------------------------------------------
 
         return self._fetch_ltp(
             symbol=symbol,
             exchange=target_exchange,
         )
 
-    # ==================================================================
+    # ================================================================
     # LATEST
-    # ==================================================================
+    # ================================================================
 
     def latest(
         self,
@@ -1498,41 +1609,34 @@ class AngelOneProvider:
         )
 
         return {
-            "record": (
+            "record":
                 records[-1]
                 if records
-                else None
-            ),
+                else None,
 
             "quality": {
-
-                "status": (
+                "status":
                     "OK"
                     if records
-                    else "EMPTY"
-                ),
+                    else "EMPTY",
 
-                "fresh": (
+                "fresh":
                     bool(records)
-                    and has_timestamp
-                ),
+                    and has_timestamp,
 
-                "count": len(
-                    records
-                ),
+                "count":
+                    len(records),
             },
 
-            "source": (
-                "angelone_smartapi_ltp"
-            ),
+            "source":
+                "angelone_smartapi_ltp",
         }
 
-    # ==================================================================
+    # ================================================================
     # OFFICIAL WEBSOCKET CLIENT
-    # ==================================================================
+    # ================================================================
 
     def stream_client(self):
-
         """Return SmartWebSocketV2 without starting it."""
 
         from SmartApi.smartWebSocketV2 import (
@@ -1548,34 +1652,42 @@ class AngelOneProvider:
             self.feed_token,
         )
 
-    # ==================================================================
+    # ================================================================
     # HEALTH
-    # ==================================================================
+    # ================================================================
 
     def health(
         self,
     ) -> dict[str, Any]:
 
         return {
-            "engine": self.name,
+            "engine":
+                self.name,
 
-            "version": self.version,
+            "version":
+                self.version,
 
-            "provider": self.name,
+            "provider":
+                self.name,
 
-            "exchange": self.exchange,
+            "exchange":
+                self.exchange,
 
-            "symbol": self.symbol,
+            "symbol":
+                self.symbol,
 
-            "authenticated": bool(
-                self.session.get(
-                    "jwtToken"
-                )
-            ),
+            "authenticated":
+                bool(
+                    self.session.get(
+                        "jwtToken"
+                    )
+                ),
 
-            "feed_token": bool(
-                self.feed_token
-            ),
+            "feed_token":
+                bool(
+                    self.feed_token
+                ),
 
-            "order_capability": False,
-        }
+            "order_capability":
+                False,
+    }
