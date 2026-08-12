@@ -344,7 +344,7 @@ class AngelOneProvider:
     ) -> list[dict[str, Any]]:
 
         target_exchange = (
-            exchange or self.exchange
+            exchange or target_exchange
         ).strip().upper()
 
         trading_symbol, token = (
@@ -422,7 +422,7 @@ class AngelOneProvider:
             "change_pct": self._float_or_none(
                 data.get("percentChange")
             ),
-            "exchange": self.exchange,
+            "exchange": target_exchange,
             "symbol_token": token,
             "source": "angelone_smartapi_ltp",
             "live": True,
@@ -761,7 +761,7 @@ class AngelOneProvider:
     ) -> list[dict[str, Any]]:
 
         target_exchange = (
-            exchange or self.exchange
+            exchange or target_exchange,
         ).strip().upper()
 
         trading_symbol, token = (
@@ -886,7 +886,7 @@ class AngelOneProvider:
                     "low": low,
                     "close": close,
                     "volume": volume,
-                    "exchange": self.exchange,
+                    "exchange": target_exchange,
                     "symbol_token": token,
                     "source": "angelone_smartapi_candles",
                     "live": False,
