@@ -21,6 +21,7 @@ from config import (
 from core.orchestrator import ApexOrchestrator
 from data.market_data import MarketData
 from data.provider_loader import load_market_provider
+from dashboard.commodity_view import CommodityView
 
 
 IST = ZoneInfo("Asia/Kolkata")
