@@ -568,16 +568,21 @@ class AngelOneProvider:
         self,
         end_dt: datetime,
         bars: int,
+        exchange: Optional[str] = None,
     ) -> tuple[
         datetime,
         datetime,
     ]:
+        """Build an exchange-aware historical data window."""
 
-        # This special handling is primarily
-        # for NSE/NIFTY. Other exchanges retain
-        # the generic lookback behavior.
+        target_exchange = (
+            exchange or self.exchange
+        ).strip().upper()
 
-        if self.exchange != "NSE":
+        # NSE/NIFTY session-aware handling.
+        # MCX and other exchanges currently use
+        # the generic lookback window.
+        if target_exchange != "NSE":
             return (
                 end_dt
                 - timedelta(
@@ -626,8 +631,7 @@ class AngelOneProvider:
             effective_end = local_end
 
         # Keep enough calendar time to obtain
-        # the requested number of one-minute bars,
-        # including weekends/market closures.
+        # the requested number of one-minute bars.
         effective_start = (
             effective_end
             - timedelta(
@@ -638,16 +642,15 @@ class AngelOneProvider:
             )
         )
 
-        # Never start after the session opening
-        # when we are requesting a same-session
-        # historical window.
+        # Never start before the NSE session opening
+        # when requesting a same-session window.
         if effective_start < session_open:
             effective_start = session_open
 
         return (
             effective_start,
             effective_end,
-        )
+    )
 
     # ------------------------------------------------------------------
     # HISTORICAL WINDOW
