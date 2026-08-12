@@ -661,6 +661,7 @@ class AngelOneProvider:
         start: Any = None,
         end: Any = None,
         limit: Optional[int] = None,
+        exchange: Optional[str] = None,
     ) -> tuple[
         datetime,
         datetime,
@@ -721,6 +722,11 @@ class AngelOneProvider:
 
         start_dt = parse(start)
 
+        target_exchange = (
+            exchange
+            or self.exchange
+        ).strip().upper()
+
         if start_dt is None:
             bars = max(
                 20,
@@ -734,6 +740,7 @@ class AngelOneProvider:
                 self._session_aware_window(
                     end_dt,
                     bars,
+                    exchange=target_exchange,
                 )
             )
 
