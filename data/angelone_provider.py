@@ -922,6 +922,11 @@ class AngelOneProvider:
         **kwargs: Any,
     ) -> list[dict[str, Any]]:
 
+        target_exchange = (
+            kwargs.get("exchange")
+            or self.exchange
+        ).strip().upper()
+
         if (
             start is not None
             or end is not None
@@ -931,14 +936,16 @@ class AngelOneProvider:
             )
         ):
             return self._fetch_candles(
-                symbol,
-                start,
-                end,
-                limit,
+                symbol=symbol,
+                start=start,
+                end=end,
+                limit=limit,
+                exchange=target_exchange,
             )
 
         return self._fetch_ltp(
-            symbol
+            symbol=symbol,
+            exchange=target_exchange,
         )
 
     def latest(
@@ -947,8 +954,14 @@ class AngelOneProvider:
         **kwargs: Any,
     ) -> dict[str, Any]:
 
+        target_exchange = (
+            kwargs.get("exchange")
+            or self.exchange
+        ).strip().upper()
+
         records = self._fetch_ltp(
-            symbol
+            symbol=symbol,
+            exchange=target_exchange,
         )
 
         has_timestamp = bool(
