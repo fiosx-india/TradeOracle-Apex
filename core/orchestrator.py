@@ -53,6 +53,7 @@ from .master_brain import ApexMasterBrain
 from .system_registry import SystemRegistry
 
 from data.market_data import MarketData
+from data.provider_loader import load_market_provider
 
 from plugins.plugin_benchmark import PluginBenchmark
 from plugins.plugin_loader import PluginLoader
@@ -181,7 +182,11 @@ class ApexOrchestrator:
             market_data
             if market_data is not None
             else MarketData(
-                provider=market_provider,
+                provider=(
+                    market_provider
+                    if market_provider is not None
+                    else load_market_provider()
+                ),
                 max_age_seconds=max_age_seconds,
             )
         )
