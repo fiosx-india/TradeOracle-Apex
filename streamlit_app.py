@@ -205,7 +205,7 @@ def main() -> None:
     # -----------------------------------------------------------------
 
     st_autorefresh(
-        interval=15000,
+        interval=60000,
         key="angelone_live_refresh",
     )
 
