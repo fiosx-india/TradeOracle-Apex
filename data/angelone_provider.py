@@ -536,10 +536,13 @@ class AngelOneProvider:
             target_exchange,
         )
 
-        response = self.client.ltpData(
-            target_exchange,
-            trading_symbol,
-            token,
+        response = self.client.getMarketData(
+            "FULL",
+            {
+                target_exchange: [
+                    token
+                ]
+            },
         )
 
         if (
@@ -558,16 +561,40 @@ class AngelOneProvider:
 
         data = response.get("data") or {}
 
-        price = self._float_or_none(data.get("ltp"))
+        fetched = (
+            data.get(target_exchange, {})
+            if isinstance(data, dict)
+            else {}
+        )
+
+        if isinstance(fetched, dict):
+            market_data = fetched.get(token) or {}
+        else:
+            market_data = {}
+
+        price = self._float_or_none(
+            market_data.get("ltp")
+        )
         if price is None or price <= 0:
             raise RuntimeError(
                 "Angel One returned no valid positive LTP value."
             )
 
-        timestamp = self._parse_exchange_timestamp(
-            data.get("exchTradeTime")
-            or data.get("exchFeedTime")
-        )
+        "open": self._float_or_none(
+            market_data.get("open")
+        ),
+        "high": self._float_or_none(
+            market_data.get("high")
+        ),
+        "low": self._float_or_none(
+            market_data.get("low")
+        ),
+        "volume": self._float_or_none(
+            market_data.get("tradeVolume")
+        ),
+        "change_pct": self._float_or_none(
+            market_data.get("percentChange")
+        ),
 
         return [
             {
