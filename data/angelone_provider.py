@@ -522,7 +522,7 @@ class AngelOneProvider:
     # LTP
     # ================================================================
 
-    def _fetch_ltp(
+     def _fetch_ltp(
         self,
         symbol: Optional[str] = None,
         exchange: Optional[str] = None,
@@ -552,81 +552,123 @@ class AngelOneProvider:
             message = (
                 response.get(
                     "message",
-                    "Angel One LTP request failed",
+                    "Angel One market-data request failed",
                 )
                 if isinstance(response, dict)
-                else "Angel One LTP request failed"
+                else "Angel One market-data request failed"
             )
+
             raise RuntimeError(message)
 
         data = response.get("data") or {}
 
         fetched = (
-            data.get(target_exchange, {})
+            data.get("fetched", [])
             if isinstance(data, dict)
-            else {}
+            else []
         )
 
-        if isinstance(fetched, dict):
-            market_data = fetched.get(token) or {}
-        else:
-            market_data = {}
+        if not isinstance(fetched, list):
+            fetched = []
+
+        market_data = None
+
+        for item in fetched:
+
+            if not isinstance(item, dict):
+                continue
+
+            item_exchange = str(
+                item.get("exchange", "")
+            ).strip().upper()
+
+            item_token = str(
+                item.get("symbolToken", "")
+            ).strip()
+
+            if (
+                item_exchange == target_exchange
+                and item_token == str(token)
+            ):
+                market_data = item
+                break
+
+        if market_data is None:
+
+            raise RuntimeError(
+                f"Angel One returned no market data for "
+                f"{target_exchange}:{trading_symbol} "
+                f"(token={token})."
+            )
 
         price = self._float_or_none(
             market_data.get("ltp")
         )
+
         if price is None or price <= 0:
+
             raise RuntimeError(
                 "Angel One returned no valid positive LTP value."
             )
 
-        "open": self._float_or_none(
-            market_data.get("open")
-        ),
-        "high": self._float_or_none(
-            market_data.get("high")
-        ),
-        "low": self._float_or_none(
-            market_data.get("low")
-        ),
-        "volume": self._float_or_none(
-            market_data.get("tradeVolume")
-        ),
-        "change_pct": self._float_or_none(
-            market_data.get("percentChange")
-        ),
+        timestamp = self._parse_exchange_timestamp(
+            market_data.get("exchTradeTime")
+            or market_data.get("exchFeedTime")
+        )
 
         return [
             {
                 "symbol": trading_symbol,
+
                 "timestamp": (
                     timestamp.isoformat()
                     if timestamp
                     else None
                 ),
+
                 "price": price,
-                "close": price,
-                "open": self._float_or_none(data.get("open")),
-                "high": self._float_or_none(data.get("high")),
-                "low": self._float_or_none(data.get("low")),
+
+                "close": self._float_or_none(
+                    market_data.get("close")
+                ),
+
+                "open": self._float_or_none(
+                    market_data.get("open")
+                ),
+
+                "high": self._float_or_none(
+                    market_data.get("high")
+                ),
+
+                "low": self._float_or_none(
+                    market_data.get("low")
+                ),
+
                 "volume": self._float_or_none(
-                    data.get("tradeVolume")
+                    market_data.get("tradeVolume")
                 ),
+
                 "change_pct": self._float_or_none(
-                    data.get("percentChange")
+                    market_data.get("percentChange")
                 ),
+
                 "exchange": target_exchange,
+
                 "symbol_token": token,
-                "source": "angelone_smartapi_ltp",
+
+                "source": "angelone_smartapi_market_data",
+
                 "live": True,
+
                 "data_type": "ltp",
+
                 "timestamp_source": (
                     "angelone_exchange"
                     if timestamp
                     else "unavailable"
                 ),
             }
-        ]
+      ]
 
     # ================================================================
     # TIMESTAMP
