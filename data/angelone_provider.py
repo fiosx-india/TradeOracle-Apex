@@ -521,8 +521,8 @@ class AngelOneProvider:
     # ================================================================
     # LTP
     # ================================================================
-
-     def _fetch_ltp(
+  
+    def _fetch_ltp(
         self,
         symbol: Optional[str] = None,
         exchange: Optional[str] = None,
@@ -668,7 +668,7 @@ class AngelOneProvider:
                     else "unavailable"
                 ),
             }
-      ]
+        ]
 
     # ================================================================
     # TIMESTAMP
