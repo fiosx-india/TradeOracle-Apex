@@ -10,6 +10,7 @@ Responsibilities:
 - validate market-data freshness
 - expose latest/history/stream interfaces
 - never generate synthetic/demo market prices
+- expose explicit data-quality information to the decision pipeline
 
 This module contains NO order-placement or GTT operations.
 """
@@ -23,7 +24,7 @@ from typing import Any, Callable, Iterable, Optional
 
 class MarketData:
     name = "MarketData"
-    version = "2.2.0"
+    version = "2.3.0"
     capabilities = ["MARKET_DATA"]
 
     REQUIRED_FIELDS = (
@@ -48,11 +49,14 @@ class MarketData:
         provider: Optional[Any] = None,
         max_age_seconds: int = 120,
     ) -> None:
+
         self.provider = provider
+
         self.max_age_seconds = max(
             1,
             int(max_age_seconds),
         )
+
         self.last_error: Optional[str] = None
 
     # ==================================================================
@@ -61,7 +65,9 @@ class MarketData:
 
     @staticmethod
     def utc_now() -> datetime:
-        return datetime.now(timezone.utc)
+        return datetime.now(
+            timezone.utc
+        )
 
     @classmethod
     def _timestamp(
@@ -69,13 +75,31 @@ class MarketData:
         value: Any,
     ) -> Optional[datetime]:
 
-        if isinstance(value, datetime):
+        if isinstance(
+            value,
+            datetime,
+        ):
+
             dt = value
 
-        elif isinstance(value, (int, float)) and not isinstance(value, bool):
-            number = float(value)
+        elif (
+            isinstance(
+                value,
+                (int, float),
+            )
+            and not isinstance(
+                value,
+                bool,
+            )
+        ):
 
-            if not math.isfinite(number):
+            number = float(
+                value
+            )
+
+            if not math.isfinite(
+                number
+            ):
                 return None
 
             # Unix milliseconds -> seconds.
@@ -83,18 +107,25 @@ class MarketData:
                 number /= 1000.0
 
             try:
+
                 dt = datetime.fromtimestamp(
                     number,
                     tz=timezone.utc,
                 )
+
             except (
                 OverflowError,
                 OSError,
                 ValueError,
             ):
+
                 return None
 
-        elif isinstance(value, str):
+        elif isinstance(
+            value,
+            str,
+        ):
+
             text = value.strip()
 
             if not text:
@@ -106,14 +137,21 @@ class MarketData:
             )
 
             try:
-                dt = datetime.fromisoformat(text)
+
+                dt = datetime.fromisoformat(
+                    text
+                )
+
             except ValueError:
+
                 return None
 
         else:
+
             return None
 
         if dt.tzinfo is None:
+
             dt = dt.replace(
                 tzinfo=timezone.utc
             )
@@ -131,24 +169,39 @@ class MarketData:
         value: Any,
     ) -> Optional[float]:
 
-        if value is None or isinstance(value, bool):
+        if (
+            value is None
+            or isinstance(
+                value,
+                bool,
+            )
+        ):
+
             return None
 
         try:
-            number = float(value)
+
+            number = float(
+                value
+            )
+
         except (
             TypeError,
             ValueError,
         ):
+
             return None
 
-        if not math.isfinite(number):
+        if not math.isfinite(
+            number
+        ):
+
             return None
 
         return number
 
     # ==================================================================
-    # RECORD VALIDATION
+    # RECORD INTEGRITY
     # ==================================================================
 
     @classmethod
@@ -156,62 +209,135 @@ class MarketData:
         cls,
         row: dict[str, Any],
     ) -> Optional[str]:
-        """Return an integrity reason without inventing missing values."""
 
-        # Any supplied numeric field must be finite.
+        # --------------------------------------------------------------
+        # NUMERIC FIELDS
+        # --------------------------------------------------------------
+
         for key in cls.NUMERIC_FIELDS:
-            if key in row and row[key] is not None:
-                if cls._number(row[key]) is None:
-                    return f"invalid_numeric:{key}"
 
-        price = cls._number(row.get("price"))
-        close = cls._number(row.get("close"))
-        open_price = cls._number(row.get("open"))
-        high = cls._number(row.get("high"))
-        low = cls._number(row.get("low"))
-        volume = cls._number(row.get("volume"))
+            if (
+                key in row
+                and row[key] is not None
+            ):
 
-        # A supplied market price/close must be positive.
-        if price is not None and price <= 0:
+                if (
+                    cls._number(
+                        row[key]
+                    )
+                    is None
+                ):
+
+                    return (
+                        f"invalid_numeric:{key}"
+                    )
+
+        price = cls._number(
+            row.get("price")
+        )
+
+        close = cls._number(
+            row.get("close")
+        )
+
+        open_price = cls._number(
+            row.get("open")
+        )
+
+        high = cls._number(
+            row.get("high")
+        )
+
+        low = cls._number(
+            row.get("low")
+        )
+
+        volume = cls._number(
+            row.get("volume")
+        )
+
+        # --------------------------------------------------------------
+        # POSITIVE PRICE SAFETY
+        # --------------------------------------------------------------
+
+        if (
+            price is not None
+            and price <= 0
+        ):
+
             return "non_positive_price"
 
-        if close is not None and close <= 0:
+        if (
+            close is not None
+            and close <= 0
+        ):
+
             return "non_positive_close"
 
-        if open_price is not None and open_price <= 0:
+        if (
+            open_price is not None
+            and open_price <= 0
+        ):
+
             return "non_positive_open"
 
-        if high is not None and high <= 0:
+        if (
+            high is not None
+            and high <= 0
+        ):
+
             return "non_positive_high"
 
-        if low is not None and low <= 0:
+        if (
+            low is not None
+            and low <= 0
+        ):
+
             return "non_positive_low"
 
-        if volume is not None and volume < 0:
+        if (
+            volume is not None
+            and volume < 0
+        ):
+
             return "negative_volume"
 
-        # Validate OHLC relationships only when the required values exist.
+        # --------------------------------------------------------------
+        # OHLC RELATIONSHIPS
+        # --------------------------------------------------------------
+
         if (
             high is not None
             and low is not None
             and high < low
         ):
+
             return "high_below_low"
 
         if (
             open_price is not None
             and high is not None
             and low is not None
-            and not low <= open_price <= high
+            and not (
+                low
+                <= open_price
+                <= high
+            )
         ):
+
             return "open_outside_range"
 
         if (
             close is not None
             and high is not None
             and low is not None
-            and not low <= close <= high
+            and not (
+                low
+                <= close
+                <= high
+            )
         ):
+
             return "close_outside_range"
 
         return None
@@ -227,10 +353,20 @@ class MarketData:
         symbol: Optional[str] = None,
     ) -> Optional[dict[str, Any]]:
 
-        if not isinstance(item, dict):
+        if not isinstance(
+            item,
+            dict,
+        ):
+
             return None
 
-        row = dict(item)
+        row = dict(
+            item
+        )
+
+        # --------------------------------------------------------------
+        # SYMBOL
+        # --------------------------------------------------------------
 
         resolved_symbol = (
             row.get("symbol")
@@ -240,9 +376,14 @@ class MarketData:
         )
 
         if resolved_symbol is not None:
+
             row["symbol"] = str(
                 resolved_symbol
             ).strip()
+
+        # --------------------------------------------------------------
+        # TIMESTAMP
+        # --------------------------------------------------------------
 
         timestamp = cls._timestamp(
             row.get("timestamp")
@@ -255,37 +396,53 @@ class MarketData:
             not row.get("symbol")
             or timestamp is None
         ):
+
             return None
 
         # --------------------------------------------------------------
-        # COMMON PROVIDER ALIASES
+        # PROVIDER ALIASES
         # --------------------------------------------------------------
 
         if row.get("price") is None:
+
             for key in (
                 "last",
                 "last_price",
                 "ltp",
             ):
+
                 if row.get(key) is not None:
-                    row["price"] = row[key]
+
+                    row["price"] = (
+                        row[key]
+                    )
+
                     break
 
-        # LTP records can legitimately use price as close.
+        # LTP can legitimately use price as close.
         if (
             row.get("close") is None
             and row.get("price") is not None
         ):
-            row["close"] = row["price"]
+
+            row["close"] = (
+                row["price"]
+            )
 
         if row.get("volume") is None:
+
             for key in (
                 "vol",
                 "trade_volume",
                 "qty",
             ):
+
                 if row.get(key) is not None:
-                    row["volume"] = row[key]
+
+                    row["volume"] = (
+                        row[key]
+                    )
+
                     break
 
         # --------------------------------------------------------------
@@ -293,26 +450,46 @@ class MarketData:
         # --------------------------------------------------------------
 
         for key in cls.NUMERIC_FIELDS:
-            if key in row and row[key] is not None:
-                number = cls._number(row[key])
+
+            if (
+                key in row
+                and row[key] is not None
+            ):
+
+                number = cls._number(
+                    row[key]
+                )
+
                 if number is None:
+
                     return None
+
                 row[key] = number
 
         # --------------------------------------------------------------
         # CANONICAL METADATA
         # --------------------------------------------------------------
 
-        row["timestamp"] = timestamp.isoformat()
-        row["ingested_at"] = cls.utc_now().isoformat()
+        row["timestamp"] = (
+            timestamp.isoformat()
+        )
+
+        row["ingested_at"] = (
+            cls.utc_now().isoformat()
+        )
 
         row["data_type"] = str(
-            row.get("data_type")
+            row.get(
+                "data_type"
+            )
             or "market"
         )
 
         row["live"] = bool(
-            row.get("live", False)
+            row.get(
+                "live",
+                False,
+            )
         )
 
         return row
@@ -329,43 +506,82 @@ class MarketData:
     ) -> list[dict[str, Any]]:
 
         if raw is None:
+
             return []
 
+        # Provider wrapper:
+        #
+        # {
+        #     "records": [...]
+        # }
+        #
+
         if (
-            isinstance(raw, dict)
+            isinstance(
+                raw,
+                dict,
+            )
             and "records" in raw
         ):
-            source_records = raw["records"]
+
+            source_records = (
+                raw["records"]
+            )
+
         else:
+
             source_records = raw
 
-        if isinstance(source_records, dict):
-            source_records = [source_records]
+        if isinstance(
+            source_records,
+            dict,
+        ):
 
-        if not isinstance(source_records, Iterable):
+            source_records = [
+                source_records
+            ]
+
+        if not isinstance(
+            source_records,
+            Iterable,
+        ):
+
             return []
 
         if isinstance(
             source_records,
             (str, bytes),
         ):
+
             return []
 
-        normalized: list[dict[str, Any]] = []
+        normalized: list[
+            dict[str, Any]
+        ] = []
 
         for item in source_records:
+
             row = cls._normalize(
                 item,
                 symbol,
             )
 
             if row is not None:
-                normalized.append(row)
+
+                normalized.append(
+                    row
+                )
+
+        # --------------------------------------------------------------
+        # CHRONOLOGICAL ORDER
+        # --------------------------------------------------------------
 
         normalized.sort(
-            key=lambda x: (
+            key=lambda row: (
                 cls._timestamp(
-                    x["timestamp"]
+                    row.get(
+                        "timestamp"
+                    )
                 )
                 or datetime.min.replace(
                     tzinfo=timezone.utc
@@ -373,21 +589,40 @@ class MarketData:
             )
         )
 
-        # Same symbol + timestamp is one market record.
-        deduped: list[dict[str, Any]] = []
-        seen: set[tuple[Any, Any]] = set()
+        # --------------------------------------------------------------
+        # DEDUPLICATION
+        # --------------------------------------------------------------
+
+        deduped: list[
+            dict[str, Any]
+        ] = []
+
+        seen: set[
+            tuple[Any, Any]
+        ] = set()
 
         for row in normalized:
+
             key = (
-                row.get("symbol"),
-                row.get("timestamp"),
+                row.get(
+                    "symbol"
+                ),
+                row.get(
+                    "timestamp"
+                ),
             )
 
             if key in seen:
+
                 continue
 
-            seen.add(key)
-            deduped.append(row)
+            seen.add(
+                key
+            )
+
+            deduped.append(
+                row
+            )
 
         return deduped
 
@@ -401,14 +636,30 @@ class MarketData:
     ) -> Any:
 
         if self.provider is None:
+
             self.last_error = (
                 "Market-data provider is not configured."
             )
+
             return None
 
         try:
-            if callable(self.provider):
-                return self.provider(**kwargs)
+
+            # ----------------------------------------------------------
+            # CALLABLE PROVIDER
+            # ----------------------------------------------------------
+
+            if callable(
+                self.provider
+            ):
+
+                return self.provider(
+                    **kwargs
+                )
+
+            # ----------------------------------------------------------
+            # STANDARD PROVIDER CONTRACT
+            # ----------------------------------------------------------
 
             fetch = getattr(
                 self.provider,
@@ -416,19 +667,27 @@ class MarketData:
                 None,
             )
 
-            if callable(fetch):
-                return fetch(**kwargs)
+            if callable(
+                fetch
+            ):
+
+                return fetch(
+                    **kwargs
+                )
 
             self.last_error = (
                 "Configured market-data provider "
                 "does not expose a callable fetch() method."
             )
+
             return None
 
         except Exception as exc:
+
             self.last_error = (
                 f"{type(exc).__name__}: {exc}"
             )
+
             return None
 
     # ==================================================================
@@ -456,18 +715,37 @@ class MarketData:
 
         source = None
 
-        if isinstance(raw, dict):
-            source = raw.get("source")
+        if isinstance(
+            raw,
+            dict,
+        ):
+
+            source = raw.get(
+                "source"
+            )
 
         records = self._records(
             raw,
             symbol,
         )
 
-        if source is None and records:
-            source = records[-1].get("source")
+        if (
+            source is None
+            and records
+        ):
+
+            source = records[
+                -1
+            ].get(
+                "source"
+            )
+
+        # --------------------------------------------------------------
+        # GATEWAY LIMIT
+        # --------------------------------------------------------------
 
         if limit:
+
             records = records[
                 -max(
                     1,
@@ -480,13 +758,22 @@ class MarketData:
         )
 
         if self.last_error:
-            quality["status"] = "ERROR"
+
+            quality["status"] = (
+                "ERROR"
+            )
+
             quality["fresh"] = False
-            quality["error"] = self.last_error
+
+            quality["error"] = (
+                self.last_error
+            )
 
         return {
             "records": records,
+
             "quality": quality,
+
             "source": (
                 source
                 or self._provider_name()
@@ -517,8 +804,14 @@ class MarketData:
 
         return {
             "record": record,
-            "quality": result["quality"],
-            "source": result["source"],
+
+            "quality": result[
+                "quality"
+            ],
+
+            "source": result[
+                "source"
+            ],
         }
 
     # ==================================================================
@@ -529,22 +822,27 @@ class MarketData:
         self,
         symbol: Optional[str] = None,
         on_record: Optional[
-            Callable[[dict[str, Any]], Any]
+            Callable[
+                [dict[str, Any]],
+                Any,
+            ]
         ] = None,
         **kwargs: Any,
     ):
         """
-        Normalize a provider-native stream when one exists.
+        Normalize a provider-native stream.
 
-        AngelOneProvider currently exposes stream_client() rather than
-        a high-level stream() generator. This gateway therefore does not
-        invent a streaming loop; callers that own SmartWebSocketV2 can
-        normalize incoming records through normalize_record().
+        The current AngelOneProvider exposes the official
+        SmartWebSocketV2 client through stream_client().
+        This gateway does not invent a streaming loop.
+
+        Providers exposing provider.stream() may still be consumed here.
         """
 
         self.last_error = None
 
         if self.provider is None:
+
             return
 
         stream_fn = getattr(
@@ -553,49 +851,72 @@ class MarketData:
             None,
         )
 
-        if not callable(stream_fn):
+        if not callable(
+            stream_fn
+        ):
+
             return
 
         try:
+
             raw_stream = stream_fn(
                 symbol=symbol,
                 **kwargs,
             )
 
-            for item in raw_stream or ():
+            for item in (
+                raw_stream or ()
+            ):
+
                 record = self._normalize(
                     item,
                     symbol,
                 )
 
                 if record is None:
+
                     continue
 
                 quality = self.quality(
                     [record]
                 )
 
-                if not quality["fresh"]:
+                if not quality.get(
+                    "fresh",
+                    False,
+                ):
+
                     continue
 
                 if on_record is not None:
-                    on_record(record)
+
+                    on_record(
+                        record
+                    )
 
                 yield record
 
         except Exception as exc:
+
             self.last_error = (
                 f"{type(exc).__name__}: {exc}"
             )
+
             return
+
+    # ==================================================================
+    # PUBLIC RECORD NORMALIZATION
+    # ==================================================================
 
     @classmethod
     def normalize_record(
         cls,
         item: Any,
         symbol: Optional[str] = None,
-    ) -> Optional[dict[str, Any]]:
-        """Public normalization helper for WebSocket consumers."""
+    ) -> Optional[
+        dict[str, Any]
+    ]:
+
         return cls._normalize(
             item,
             symbol,
@@ -607,31 +928,67 @@ class MarketData:
 
     def quality(
         self,
-        records: list[dict[str, Any]],
+        records: list[
+            dict[str, Any]
+        ],
     ) -> dict[str, Any]:
 
+        # --------------------------------------------------------------
+        # EMPTY
+        # --------------------------------------------------------------
+
         if not records:
+
             return {
                 "status": "EMPTY",
+
                 "count": 0,
+
                 "fresh": False,
+
                 "missing": list(
                     self.REQUIRED_FIELDS
                 ),
+
                 "invalid": [],
+
                 "invalid_count": 0,
+
                 "valid_count": 0,
+
                 "age_seconds": None,
-                "max_age_seconds": self.max_age_seconds,
+
+                "latest_age_seconds": None,
+
+                "latest_timestamp": None,
+
+                "latest_valid": False,
+
+                "max_age_seconds":
+                    self.max_age_seconds,
             }
 
         now = self.utc_now()
 
-        invalid: list[dict[str, Any]] = []
-        ages: list[float] = []
+        invalid: list[
+            dict[str, Any]
+        ] = []
+
         valid_count = 0
 
-        for index, record in enumerate(records):
+        latest_timestamp = None
+
+        latest_age_seconds = None
+
+        latest_valid = False
+
+        # --------------------------------------------------------------
+        # VALIDATE EVERY RECORD
+        # --------------------------------------------------------------
+
+        for index, record in enumerate(
+            records
+        ):
 
             missing = [
                 field
@@ -640,21 +997,32 @@ class MarketData:
             ]
 
             if missing:
-                invalid.append({
-                    "index": index,
-                    "missing": missing,
-                })
+
+                invalid.append(
+                    {
+                        "index": index,
+                        "missing": missing,
+                    }
+                )
+
                 continue
 
             timestamp = self._timestamp(
-                record.get("timestamp")
+                record.get(
+                    "timestamp"
+                )
             )
 
             if timestamp is None:
-                invalid.append({
-                    "index": index,
-                    "reason": "invalid_timestamp",
-                })
+
+                invalid.append(
+                    {
+                        "index": index,
+                        "reason":
+                            "invalid_timestamp",
+                    }
+                )
+
                 continue
 
             age = (
@@ -662,10 +1030,15 @@ class MarketData:
             ).total_seconds()
 
             if age < -5:
-                invalid.append({
-                    "index": index,
-                    "reason": "future_timestamp",
-                })
+
+                invalid.append(
+                    {
+                        "index": index,
+                        "reason":
+                            "future_timestamp",
+                    }
+                )
+
                 continue
 
             integrity_error = (
@@ -675,63 +1048,174 @@ class MarketData:
             )
 
             if integrity_error:
-                invalid.append({
-                    "index": index,
-                    "reason": integrity_error,
-                })
+
+                invalid.append(
+                    {
+                        "index": index,
+                        "reason":
+                            integrity_error,
+                    }
+                )
+
                 continue
 
-            ages.append(
-                max(
-                    0.0,
-                    age,
-                )
-            )
             valid_count += 1
 
-        # _records() sorts chronologically, so the last valid age is
-        # the age of the newest valid record.
-        latest_age = (
-            ages[-1]
-            if ages
+            # ----------------------------------------------------------
+            # Because records are chronological, this is the newest
+            # valid record encountered so far.
+            # ----------------------------------------------------------
+
+            latest_timestamp = timestamp
+
+            latest_age_seconds = max(
+                0.0,
+                age,
+            )
+
+            latest_valid = True
+
+        # --------------------------------------------------------------
+        # IMPORTANT SAFETY RULE
+        #
+        # Old historical invalid rows must NOT automatically destroy
+        # a valid current market feed.
+        #
+        # But if the newest record itself is invalid, the gateway
+        # must not report the feed as fresh.
+        # --------------------------------------------------------------
+
+        newest_record = records[-1]
+
+        newest_timestamp = self._timestamp(
+            newest_record.get(
+                "timestamp"
+            )
+        )
+
+        newest_integrity_error = (
+            self._record_integrity_error(
+                newest_record
+            )
+        )
+
+        newest_valid = (
+            newest_timestamp is not None
+            and newest_integrity_error is None
+            and (
+                now - newest_timestamp
+            ).total_seconds()
+            >= -5
+        )
+
+        if newest_timestamp is not None:
+
+            newest_age = (
+                now - newest_timestamp
+            ).total_seconds()
+        else:
+
+            newest_age = None
+
+        # --------------------------------------------------------------
+        # FRESHNESS
+        # --------------------------------------------------------------
+
+        fresh = (
+            newest_valid
+            and newest_age is not None
+            and newest_age >= 0
+            and newest_age
+            <= self.max_age_seconds
+        )
+
+        # --------------------------------------------------------------
+        # STATUS
+        # --------------------------------------------------------------
+
+        if not newest_valid:
+
+            status = "INVALID"
+
+        elif fresh:
+
+            status = "OK"
+
+        else:
+
+            status = "STALE"
+
+        # --------------------------------------------------------------
+        # LATEST RECORD METADATA
+        # --------------------------------------------------------------
+
+        latest_timestamp_iso = (
+            newest_timestamp.isoformat()
+            if newest_timestamp is not None
             else None
         )
 
-        has_invalid = bool(invalid)
-
-        # IMPORTANT:
-        # INVALID data is never considered fresh. This closes the
-        # MarketData -> SignalGate safety gap present in the older version.
-        fresh = (
-            not has_invalid
-            and latest_age is not None
-            and latest_age <= self.max_age_seconds
+        latest_error = (
+            newest_integrity_error
+            if newest_integrity_error
+            else (
+                "invalid_timestamp"
+                if newest_timestamp is None
+                else None
+            )
         )
-
-        if has_invalid:
-            status = "INVALID"
-        elif fresh:
-            status = "OK"
-        else:
-            status = "STALE"
 
         return {
             "status": status,
-            "count": len(records),
+
+            "count": len(
+                records
+            ),
+
             "fresh": fresh,
+
             "missing": [],
+
             "invalid": invalid,
-            "invalid_count": len(invalid),
+
+            "invalid_count": len(
+                invalid
+            ),
+
             "valid_count": valid_count,
+
             "age_seconds": (
                 round(
-                    latest_age,
+                    newest_age,
                     3,
                 )
-                if latest_age is not None
+                if newest_age is not None
                 else None
             ),
-            "max_age_seconds": self.max_age_seconds,
+
+            "latest_age_seconds": (
+                round(
+                    newest_age,
+                    3,
+                )
+                if newest_age is not None
+                else None
+            ),
+
+            "latest_timestamp": (
+                latest_timestamp_iso
+            ),
+
+            "latest_valid": (
+                newest_valid
+            ),
+
+            "latest_error": (
+                latest_error
+            ),
+
+            "max_age_seconds":
+                self.max_age_seconds,
         }
 
     # ==================================================================
@@ -743,13 +1227,19 @@ class MarketData:
     ) -> Optional[str]:
 
         if self.provider is None:
+
             return None
 
-        if callable(self.provider):
+        if callable(
+            self.provider
+        ):
+
             return getattr(
                 self.provider,
                 "__name__",
-                str(self.provider),
+                str(
+                    self.provider
+                ),
             )
 
         return getattr(
@@ -769,18 +1259,28 @@ class MarketData:
         provider_health = None
 
         if self.provider is not None:
+
             health_fn = getattr(
                 self.provider,
                 "health",
                 None,
             )
 
-            if callable(health_fn):
+            if callable(
+                health_fn
+            ):
+
                 try:
-                    provider_health = health_fn()
+
+                    provider_health = (
+                        health_fn()
+                    )
+
                 except Exception as exc:
+
                     provider_health = {
                         "status": "ERROR",
+
                         "error": (
                             f"{type(exc).__name__}: "
                             f"{exc}"
@@ -789,12 +1289,26 @@ class MarketData:
 
         return {
             "engine": self.name,
+
             "version": self.version,
+
             "provider_configured": (
                 self.provider is not None
             ),
-            "provider": self._provider_name(),
-            "max_age_seconds": self.max_age_seconds,
-            "last_error": self.last_error,
-            "provider_health": provider_health,
-        }
+
+            "provider": (
+                self._provider_name()
+            ),
+
+            "max_age_seconds": (
+                self.max_age_seconds
+            ),
+
+            "last_error": (
+                self.last_error
+            ),
+
+            "provider_health": (
+                provider_health
+            ),
+            }
