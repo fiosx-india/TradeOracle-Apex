@@ -201,21 +201,6 @@ class AutoBuyDecision:
         }
 
         # ----------------------------------------------------------
-        # AUTO BUY ENABLEMENT IS NOT DECISION LOGIC
-        # ----------------------------------------------------------
-
-        if direction != "UP":
-
-            return AutoBuyResult(
-                allowed=False,
-                action="NO_BUY",
-                reason=(
-                    f"direction_is_{direction.lower()}"
-                ),
-                **base_kwargs,
-            )
-
-        # ----------------------------------------------------------
         # MARKET DATA QUALITY
         # ----------------------------------------------------------
 
