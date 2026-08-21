@@ -355,6 +355,54 @@ REQUIRE_FRESH_DATA_FOR_SIGNAL = _env_bool(
     True,
 )
 
+# ---------------------------------------------------------------------------
+# AUTO BUY
+# ---------------------------------------------------------------------------
+
+AUTO_BUY_ENABLED = _env_bool(
+    "APEX_AUTO_BUY_ENABLED",
+    False,
+)
+
+# PAPER = test only; no broker order is submitted.
+# LIVE  = reserved for explicit broker execution.
+AUTO_BUY_MODE = _env_str(
+    "APEX_AUTO_BUY_MODE",
+    "PAPER",
+).upper()
+
+if AUTO_BUY_MODE not in {"PAPER", "LIVE"}:
+    raise ValueError(
+        "APEX_AUTO_BUY_MODE must be PAPER or LIVE."
+    )
+
+AUTO_BUY_MIN_CONFIDENCE = _env_float(
+    "APEX_AUTO_BUY_MIN_CONFIDENCE",
+    0.60,
+)
+
+AUTO_BUY_REQUIRE_FRESH = _env_bool(
+    "APEX_AUTO_BUY_REQUIRE_FRESH",
+    True,
+)
+
+AUTO_BUY_REQUIRE_POSITIVE_SCORE = _env_bool(
+    "APEX_AUTO_BUY_REQUIRE_POSITIVE_SCORE",
+    True,
+)
+
+AUTO_BUY_MIN_HISTORY = _env_int(
+    "APEX_AUTO_BUY_MIN_HISTORY",
+    30,
+    minimum=1,
+)
+
+AUTO_BUY_MAX_QUANTITY = _env_int(
+    "APEX_AUTO_BUY_MAX_QUANTITY",
+    1,
+    minimum=1,
+)
+
 
 # ---------------------------------------------------------------------------
 # AUTO-BUY SETTINGS
