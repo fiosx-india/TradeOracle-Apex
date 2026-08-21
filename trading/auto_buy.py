@@ -219,16 +219,9 @@ class AutoBuyDecision:
                 **base_kwargs,
             )
 
-        if valid_count < self.min_history:
-
-            return AutoBuyResult(
-                allowed=False,
-                action="NO_BUY",
-                reason=(
-                    "insufficient_market_history"
-                ),
-                **base_kwargs,
-            )
+        # Freshness must be checked BEFORE history.
+        # Stale market data must never reach the
+        # history/direction/confidence/score gates.
 
         if self.require_fresh and not fresh:
 
@@ -239,6 +232,15 @@ class AutoBuyDecision:
                 **base_kwargs,
             )
 
+        if valid_count < self.min_history:
+
+            return AutoBuyResult(
+                allowed=False,
+                action="NO_BUY",
+                reason="insufficient_market_history",
+                **base_kwargs,
+            )
+            
         # ----------------------------------------------------------
         # DIRECTION
         # ----------------------------------------------------------
