@@ -1219,6 +1219,23 @@ class ApexOrchestrator:
         ):
             quality = {}
 
+        # Canonical latest market price for downstream consumers.
+        # The value is propagated from MarketContext only; no new
+        # price is calculated or synthesized here.
+        last_price = context_data.get(
+            "last_price"
+        )
+
+        if last_price is None:
+            last_price = context_data.get(
+                "price"
+            )
+
+        if last_price is None:
+            last_price = context_data.get(
+                "close"
+            )
+
         return {
             "quality": copy.deepcopy(
                 quality
@@ -1239,6 +1256,13 @@ class ApexOrchestrator:
             "records": quality.get(
                 "count",
                 0,
+            ),
+
+            "last_price": last_price,
+
+            # Backward-compatible alias for existing UI consumers.
+            "price": context_data.get(
+                "price"
             ),
 
             "fresh": bool(
