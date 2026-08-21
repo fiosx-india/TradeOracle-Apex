@@ -231,6 +231,40 @@ with st.sidebar:
     st.caption("Default refresh: 60 seconds. This avoids unnecessary API polling.")
 
     st.divider()
+    st.subheader("🤖 Auto Buy")
+
+    auto_buy_enabled = st.checkbox(
+        "Enable Auto Buy",
+        value=AUTO_BUY_ENABLED,
+        key="auto_buy_enabled",
+    )
+
+    st.caption(f"Mode: {AUTO_BUY_MODE}")
+
+    auto_buy_quantity = st.number_input(
+        "Quantity",
+        min_value=1,
+        max_value=AUTO_BUY_MAX_QUANTITY,
+        value=1,
+        step=1,
+        key="auto_buy_quantity",
+    )
+
+    st.caption(
+        f"Minimum confidence: "
+        f"{AUTO_BUY_MIN_CONFIDENCE * 100:.0f}%"
+    )
+
+    if AUTO_BUY_MODE == "PAPER":
+        st.info(
+            "PAPER mode: no real broker order will be placed."
+        )
+    else:
+        st.warning(
+            "LIVE mode is not enabled for this test executor."
+        )
+
+    st.divider()
     st.subheader("Connection")
     st.caption("Uses the existing Angel One provider/session.")
     st.caption("Exchange: **MCX**")
