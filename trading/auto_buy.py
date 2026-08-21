@@ -240,6 +240,19 @@ class AutoBuyDecision:
             )
 
         # ----------------------------------------------------------
+        # DIRECTION
+        # ----------------------------------------------------------
+
+        if direction != "UP":
+
+            return AutoBuyResult(
+                allowed=False,
+                action="NO_BUY",
+                reason=f"direction_is_{direction.lower()}",
+                **base_kwargs,
+            )
+
+        # ----------------------------------------------------------
         # CONFIDENCE
         # ----------------------------------------------------------
 
