@@ -204,6 +204,60 @@ class AutoBuyDecision:
         # MARKET DATA QUALITY
         # ----------------------------------------------------------
 
+        # Canonical market-data quality is stored under
+        # market_data["quality"].
+        #
+        # Top-level fallbacks are retained for backward compatibility
+        # with older MarketData payloads.
+
+        quality = market_data.get(
+            "quality",
+            {},
+        )
+
+        if not isinstance(quality, Mapping):
+            quality = {}
+
+        status = str(
+            quality.get(
+                "status",
+                market_data.get(
+                    "status",
+                    "UNKNOWN",
+                ),
+            )
+        ).upper().strip()
+
+        fresh = bool(
+            quality.get(
+                "fresh",
+                market_data.get(
+                    "fresh",
+                    False,
+                ),
+            )
+        )
+
+        valid_count = self._int(
+            quality.get(
+                "valid_count",
+                quality.get(
+                    "count",
+                    market_data.get(
+                        "valid_count",
+                        market_data.get(
+                            "count",
+                            0,
+                        ),
+                    ),
+                ),
+            )
+        )
+
+        # ----------------------------------------------------------
+        # INVALID MARKET DATA
+        # ----------------------------------------------------------
+
         if status in {
             "INVALID",
             "ERROR",
@@ -219,9 +273,13 @@ class AutoBuyDecision:
                 **base_kwargs,
             )
 
-        # Freshness must be checked BEFORE history.
+        # ----------------------------------------------------------
+        # FRESHNESS
+        # ----------------------------------------------------------
+        #
+        # Freshness is checked BEFORE history.
         # Stale market data must never reach the
-        # history/direction/confidence/score gates.
+        # history / direction / confidence / score gates.
 
         if self.require_fresh and not fresh:
 
@@ -231,6 +289,10 @@ class AutoBuyDecision:
                 reason="market_data_not_fresh",
                 **base_kwargs,
             )
+
+        # ----------------------------------------------------------
+        # MARKET HISTORY
+        # ----------------------------------------------------------
 
         if valid_count < self.min_history:
 
