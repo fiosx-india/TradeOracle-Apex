@@ -361,38 +361,6 @@ for symbol in selected:
     decision = brain.get("decision", {}) if isinstance(brain, dict) else {}
     market = hr.get("market_data", {})
 
-# ============================================================
-# AUTO BUY DECISION
-# ============================================================
-
-auto_buy_result = None
-paper_order_result = None
-
-if auto_buy_enabled:
-
-    auto_buy_engine = AutoBuyDecision(
-        min_confidence=AUTO_BUY_MIN_CONFIDENCE,
-        require_fresh=AUTO_BUY_REQUIRE_FRESH,
-        require_positive_score=AUTO_BUY_REQUIRE_POSITIVE_SCORE,
-        min_history=AUTO_BUY_MIN_HISTORY,
-        max_quantity=AUTO_BUY_MAX_QUANTITY,
-    )
-
-    auto_buy_result = auto_buy_engine.evaluate(
-        symbol=symbol,
-        exchange="MCX",
-        horizon_minutes=horizon,
-        decision=decision,
-        market_data=market,
-        quantity=auto_buy_quantity,
-    )
-
-    if AUTO_BUY_MODE == "PAPER":
-        paper_executor = PaperOrderExecutor()
-
-        paper_order_result = paper_executor.execute(
-            auto_buy_result
-        )
     confidence = safe_float(decision.get("confidence")) * 100
     rows.append({
         "Commodity": symbol,
