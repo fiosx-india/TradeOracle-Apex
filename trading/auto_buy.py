@@ -49,7 +49,7 @@ class AutoBuyDecision:
     """
 
     name = "AutoBuyDecision"
-    version = "1.0.0"
+    version = "1.1.0"
 
     def __init__(
         self,
@@ -65,9 +65,7 @@ class AutoBuyDecision:
             min(1.0, float(min_confidence)),
         )
 
-        self.require_fresh = bool(
-            require_fresh
-        )
+        self.require_fresh = bool(require_fresh)
 
         self.require_positive_score = bool(
             require_positive_score
@@ -90,10 +88,7 @@ class AutoBuyDecision:
     ) -> float:
         try:
             return float(value)
-        except (
-            TypeError,
-            ValueError,
-        ):
+        except (TypeError, ValueError):
             return default
 
     @staticmethod
@@ -103,11 +98,46 @@ class AutoBuyDecision:
     ) -> int:
         try:
             return int(value)
-        except (
-            TypeError,
-            ValueError,
-        ):
+        except (TypeError, ValueError):
             return default
+
+    @staticmethod
+    def _bool(
+        value: Any,
+        default: bool = False,
+    ) -> bool:
+        """
+        Safely parse boolean-like market-data values.
+
+        This avoids the Python pitfall where bool("False")
+        evaluates to True.
+        """
+        if isinstance(value, bool):
+            return value
+
+        if value is None:
+            return default
+
+        if isinstance(value, (int, float)):
+            return bool(value)
+
+        normalized = str(value).strip().lower()
+
+        if normalized in {"true", "1", "yes", "y", "fresh", "ok"}:
+            return True
+
+        if normalized in {"false", "0", "no", "n", "stale", "none"}:
+            return False
+
+        return default
+
+    @staticmethod
+    def _reason(
+        prefix: str,
+        value: Any,
+    ) -> str:
+        normalized = str(value).strip().lower()
+        return f"{prefix}_{normalized}"
 
     def evaluate(
         self,
@@ -119,6 +149,10 @@ class AutoBuyDecision:
         market_data: Mapping[str, Any],
         quantity: int = 1,
     ) -> AutoBuyResult:
+
+        # ----------------------------------------------------------
+        # EXISTING APEX DECISION
+        # ----------------------------------------------------------
 
         direction = str(
             decision.get(
@@ -141,79 +175,22 @@ class AutoBuyDecision:
             )
         )
 
-        status = str(
-            market_data.get(
-                "status",
-                "UNKNOWN",
-            )
-        ).upper().strip()
-
-        fresh = bool(
-            market_data.get(
-                "fresh",
-                False,
-            )
-        )
-
-        valid_count = self._int(
-            market_data.get(
-                "valid_count",
-                market_data.get(
-                    "count",
-                    0,
-                ),
-            )
-        )
-
-        price_value = market_data.get(
-            "last_price",
-            market_data.get(
-                "price",
-            ),
-        )
-
-        price = None
-
-        try:
-            if price_value is not None:
-                price = float(price_value)
-        except (
-            TypeError,
-            ValueError,
-        ):
-            price = None
-
-        safe_quantity = min(
-            max(1, int(quantity)),
-            self.max_quantity,
-        )
-
-        base_kwargs = {
-            "symbol": symbol,
-            "exchange": exchange,
-            "horizon_minutes": int(
-                horizon_minutes
-            ),
-            "confidence": confidence,
-            "score": score,
-            "price": price,
-            "quantity": safe_quantity,
-        }
-
         # ----------------------------------------------------------
-        # MARKET DATA QUALITY
+        # CANONICAL MARKET-DATA QUALITY
         # ----------------------------------------------------------
-
-        # Canonical market-data quality is stored under
-        # market_data["quality"].
         #
-        # Top-level fallbacks are retained for backward compatibility
-        # with older MarketData payloads.
+        # New payloads should provide:
+        #
+        # market_data["quality"] = {
+        #     "status": ...,
+        #     "fresh": ...,
+        #     "valid_count": ...,
+        # }
+        #
+        # Older payloads are still supported through top-level
+        # fallbacks.
 
-        quality = market_data.get(
-            "quality",
-            {},
-        )
+        quality = market_data.get("quality", {})
 
         if not isinstance(quality, Mapping):
             quality = {}
@@ -228,14 +205,15 @@ class AutoBuyDecision:
             )
         ).upper().strip()
 
-        fresh = bool(
+        fresh = self._bool(
             quality.get(
                 "fresh",
                 market_data.get(
                     "fresh",
                     False,
                 ),
-            )
+            ),
+            default=False,
         )
 
         valid_count = self._int(
@@ -251,11 +229,59 @@ class AutoBuyDecision:
                         ),
                     ),
                 ),
-            )
+            ),
+            default=0,
         )
 
         # ----------------------------------------------------------
-        # INVALID MARKET DATA
+        # MARKET PRICE
+        # ----------------------------------------------------------
+
+        price_value = market_data.get(
+            "last_price",
+            market_data.get(
+                "price",
+            ),
+        )
+
+        price = None
+
+        try:
+            if price_value is not None:
+                parsed_price = float(price_value)
+
+                if parsed_price > 0:
+                    price = parsed_price
+
+        except (TypeError, ValueError):
+            price = None
+
+        # ----------------------------------------------------------
+        # QUANTITY
+        # ----------------------------------------------------------
+
+        requested_quantity = self._int(
+            quantity,
+            default=1,
+        )
+
+        safe_quantity = min(
+            max(1, requested_quantity),
+            self.max_quantity,
+        )
+
+        base_kwargs = {
+            "symbol": symbol,
+            "exchange": exchange,
+            "horizon_minutes": int(horizon_minutes),
+            "confidence": confidence,
+            "score": score,
+            "price": price,
+            "quantity": safe_quantity,
+        }
+
+        # ----------------------------------------------------------
+        # 1. INVALID MARKET DATA
         # ----------------------------------------------------------
 
         if status in {
@@ -267,19 +293,21 @@ class AutoBuyDecision:
             return AutoBuyResult(
                 allowed=False,
                 action="NO_BUY",
-                reason=(
-                    f"market_data_status_{status.lower()}"
+                reason=self._reason(
+                    "market_data_status",
+                    status,
                 ),
                 **base_kwargs,
             )
 
         # ----------------------------------------------------------
-        # FRESHNESS
+        # 2. FRESHNESS
         # ----------------------------------------------------------
         #
-        # Freshness is checked BEFORE history.
-        # Stale market data must never reach the
-        # history / direction / confidence / score gates.
+        # Freshness MUST be checked before history and before
+        # any trading-direction/confidence/score gate.
+        #
+        # Stale data must never be eligible for BUY.
 
         if self.require_fresh and not fresh:
 
@@ -291,7 +319,7 @@ class AutoBuyDecision:
             )
 
         # ----------------------------------------------------------
-        # MARKET HISTORY
+        # 3. MARKET HISTORY
         # ----------------------------------------------------------
 
         if valid_count < self.min_history:
@@ -302,9 +330,9 @@ class AutoBuyDecision:
                 reason="insufficient_market_history",
                 **base_kwargs,
             )
-            
+
         # ----------------------------------------------------------
-        # DIRECTION
+        # 4. DIRECTION
         # ----------------------------------------------------------
 
         if direction != "UP":
@@ -312,12 +340,15 @@ class AutoBuyDecision:
             return AutoBuyResult(
                 allowed=False,
                 action="NO_BUY",
-                reason=f"direction_is_{direction.lower()}",
+                reason=self._reason(
+                    "direction_is",
+                    direction,
+                ),
                 **base_kwargs,
             )
 
         # ----------------------------------------------------------
-        # CONFIDENCE
+        # 5. CONFIDENCE
         # ----------------------------------------------------------
 
         if confidence < self.min_confidence:
@@ -330,7 +361,7 @@ class AutoBuyDecision:
             )
 
         # ----------------------------------------------------------
-        # SCORE
+        # 6. SCORE
         # ----------------------------------------------------------
 
         if (
@@ -346,7 +377,7 @@ class AutoBuyDecision:
             )
 
         # ----------------------------------------------------------
-        # PRICE
+        # 7. PRICE
         # ----------------------------------------------------------
 
         if price is None or price <= 0:
@@ -359,7 +390,7 @@ class AutoBuyDecision:
             )
 
         # ----------------------------------------------------------
-        # FINAL ELIGIBILITY
+        # 8. FINAL ELIGIBILITY
         # ----------------------------------------------------------
 
         return AutoBuyResult(
@@ -409,4 +440,4 @@ class PaperOrderExecutor:
             "confidence": order.confidence,
             "score": order.score,
             "reason": order.reason,
-      }
+        }
