@@ -25,7 +25,23 @@ from config import (
 from core.orchestrator import ApexOrchestrator
 from data.market_data import MarketData
 from data.provider_loader import load_market_provider
+from config import (
+    ANGELONE_HISTORY_BARS,
+    DATA_MODE,
+    LIVE_DATA_MAX_AGE_SECONDS,
+    AUTO_BUY_ENABLED,
+    AUTO_BUY_MODE,
+    AUTO_BUY_MIN_CONFIDENCE,
+    AUTO_BUY_REQUIRE_FRESH,
+    AUTO_BUY_REQUIRE_POSITIVE_SCORE,
+    AUTO_BUY_MIN_HISTORY,
+    AUTO_BUY_MAX_QUANTITY,
+)
 
+from trading.auto_buy import (
+    AutoBuyDecision,
+    PaperOrderExecutor,
+)
 
 st.set_page_config(
     page_title="TradeOracle Apex - Commodity Auto Board",
