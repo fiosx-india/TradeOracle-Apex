@@ -357,6 +357,76 @@ REQUIRE_FRESH_DATA_FOR_SIGNAL = _env_bool(
 
 
 # ---------------------------------------------------------------------------
+# AUTO-BUY SETTINGS
+# ---------------------------------------------------------------------------
+# Auto-buy is controlled centrally from configuration.
+# Keep the default disabled until the complete safety pipeline is validated.
+
+AUTO_BUY_ENABLED = _env_bool(
+    "APEX_AUTO_BUY_ENABLED",
+    False,
+)
+
+AUTO_BUY_MODE = _env_str(
+    "APEX_AUTO_BUY_MODE",
+    "PAPER",
+).upper()
+
+if AUTO_BUY_MODE not in {
+    "PAPER",
+    "LIVE",
+}:
+    raise ValueError(
+        "APEX_AUTO_BUY_MODE must be 'PAPER' or 'LIVE'."
+    )
+
+AUTO_BUY_MIN_CONFIDENCE = _env_float(
+    "APEX_AUTO_BUY_MIN_CONFIDENCE",
+    0.60,
+)
+
+if not 0.0 <= AUTO_BUY_MIN_CONFIDENCE <= 1.0:
+    raise ValueError(
+        "APEX_AUTO_BUY_MIN_CONFIDENCE must be between 0.0 and 1.0."
+    )
+
+AUTO_BUY_REQUIRE_FRESH_DATA = _env_bool(
+    "APEX_AUTO_BUY_REQUIRE_FRESH_DATA",
+    True,
+)
+
+AUTO_BUY_REQUIRE_UP_DIRECTION = _env_bool(
+    "APEX_AUTO_BUY_REQUIRE_UP_DIRECTION",
+    True,
+)
+
+AUTO_BUY_REQUIRE_POSITIVE_SCORE = _env_bool(
+    "APEX_AUTO_BUY_REQUIRE_POSITIVE_SCORE",
+    True,
+)
+
+AUTO_BUY_REQUIRE_RISK_GATE = _env_bool(
+    "APEX_AUTO_BUY_REQUIRE_RISK_GATE",
+    True,
+)
+
+AUTO_BUY_MAX_QUANTITY = _env_int(
+    "APEX_AUTO_BUY_MAX_QUANTITY",
+    1,
+    minimum=1,
+)
+
+AUTO_BUY_STOP_LOSS_PERCENT = _env_float(
+    "APEX_AUTO_BUY_STOP_LOSS_PERCENT",
+    0.50,
+)
+
+AUTO_BUY_TARGET_PERCENT = _env_float(
+    "APEX_AUTO_BUY_TARGET_PERCENT",
+    1.00,
+)
+
+# ---------------------------------------------------------------------------
 # NEWS
 # ---------------------------------------------------------------------------
 
