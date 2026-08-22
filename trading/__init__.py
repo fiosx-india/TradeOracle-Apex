@@ -1,4 +1,4 @@
-from .signal_gate import SignalGate
+from core.signal_gate import SignalGate
 from .auto_buy import (
     AutoBuyDecision,
     AutoBuyResult,
