@@ -129,6 +129,8 @@ class SignalGate:
 
         result["raw_direction"] = raw_direction
 
+        # Unknown directions are not tradable. Preserve them in
+        # raw_direction for diagnostics rather than inventing a mapping.
         if raw_direction not in self.ALLOWED_DIRECTIONS:
             direction_is_valid = False
         else:
@@ -174,11 +176,15 @@ class SignalGate:
             )
         ).upper().strip()
 
+        # Explicit provider/gateway failures must never be treated as
+        # merely "not fresh". They are distinct diagnostic conditions.
         market_data_blocked = status in {
             "INVALID",
             "ERROR",
         }
 
+        # If the quality payload reports invalid records but does not
+        # provide invalid_count, fall back to the presence of "invalid".
         invalid_items = quality.get(
             "invalid"
         )
@@ -195,8 +201,13 @@ class SignalGate:
         # CONFIDENCE
         # --------------------------------------------------------------
 
+        raw_confidence = result.get(
+            "confidence",
+            0.0,
+        )
+
         confidence = self._safe_float(
-            result.get("confidence", 0.0),
+            raw_confidence,
             0.0,
         )
 
